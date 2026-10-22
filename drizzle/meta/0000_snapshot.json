@@ -177,12 +177,8 @@
           "name": "settings_school_id_schools_id_fk",
           "tableFrom": "settings",
           "tableTo": "schools",
-          "columnsFrom": [
-            "school_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["school_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -333,12 +329,8 @@
           "name": "users_school_id_schools_id_fk",
           "tableFrom": "users",
           "tableTo": "schools",
-          "columnsFrom": [
-            "school_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["school_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -354,11 +346,7 @@
     "public.user_role": {
       "name": "user_role",
       "schema": "public",
-      "values": [
-        "ADMIN",
-        "TEACHER",
-        "STUDENT"
-      ]
+      "values": ["ADMIN", "TEACHER", "STUDENT"]
     }
   },
   "schemas": {},

@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "routine_school_class_section_slot_unique" ON "routine_entries" USING btree ("school_id","class_id","section_id","day_of_week","period");

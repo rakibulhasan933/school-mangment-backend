@@ -22,6 +22,41 @@
       "when": 1792666453863,
       "tag": "0002_dashing_talisman",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1792668363852,
+      "tag": "0003_natural_kingpin",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1792670574008,
+      "tag": "0004_acoustic_apocalypse",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1792674475421,
+      "tag": "0005_high_smasher",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1792697706863,
+      "tag": "0006_spotty_chronomancer",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1792697769278,
+      "tag": "0007_soft_impossible_man",
+      "breakpoints": true
     }
   ]
 }

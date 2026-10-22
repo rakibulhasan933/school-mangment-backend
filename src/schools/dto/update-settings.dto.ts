@@ -1,4 +1,10 @@
-import { IsHexColor, IsObject, IsOptional, IsString, MaxLength } from "class-validator";
+import {
+  IsHexColor,
+  IsObject,
+  IsOptional,
+  IsString,
+  MaxLength,
+} from 'class-validator';
 
 export class UpdateSettingsDto {
   @IsOptional() @IsString() @MaxLength(200) nameBn?: string;
