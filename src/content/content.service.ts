@@ -66,6 +66,30 @@ const resources = {
 } as const;
 export type ContentResource = keyof typeof resources;
 
+/**
+ * A stored content row is publicly visible unless one of its visibility
+ * flags (isPublished / isEnabled / isActive — whichever the table has)
+ * is switched off. Rows without any flag (e.g. events) are always visible.
+ */
+export function isPubliclyVisible(row: Record<string, unknown>): boolean {
+  if ('isPublished' in row && !row.isPublished) return false;
+  if ('isEnabled' in row && !row.isEnabled) return false;
+  if ('isActive' in row && !row.isActive) return false;
+  return true;
+}
+
+const STAFF_ONLY_AUDIENCES = ['teacher', 'teachers', 'admin', 'staff'];
+
+/**
+ * Notices addressed to staff only (audience teacher/admin/staff) must
+ * never appear on the public notice board or homepage ticker — the same
+ * rule the student portal applies (there they are hidden from students;
+ * here they are hidden from the public entirely).
+ */
+export function isStaffOnlyAudience(audience?: string | null): boolean {
+  return STAFF_ONLY_AUDIENCES.includes((audience ?? 'public').toLowerCase());
+}
+
 @Injectable()
 export class ContentService {
   private readonly db = createDb();
@@ -272,7 +296,9 @@ export class ContentService {
         serviceLinks: serviceItemsRows,
         banners: bannerRows,
         pages: pageRows,
-        notices: noticeRows,
+        notices: noticeRows.filter(
+          (row) => !isStaffOnlyAudience(row.audience),
+        ),
         news: newsRows,
         events: eventRows,
         galleries: galleryRows,
@@ -378,20 +404,22 @@ export class ContentService {
               and(eq(pages.schoolId, schoolId), eq(pages.isPublished, true)),
             ),
         };
-      case 'notices':
-        return {
-          data: await this.db
-            .select()
-            .from(notices)
-            .where(
-              and(
-                eq(notices.schoolId, schoolId),
-                eq(notices.isPublished, true),
-                or(isNull(notices.publishAt), lte(notices.publishAt, now)),
-                or(isNull(notices.expiresAt), gt(notices.expiresAt, now)),
-              ),
+      case 'notices': {
+        const rows = await this.db
+          .select()
+          .from(notices)
+          .where(
+            and(
+              eq(notices.schoolId, schoolId),
+              eq(notices.isPublished, true),
+              or(isNull(notices.publishAt), lte(notices.publishAt, now)),
+              or(isNull(notices.expiresAt), gt(notices.expiresAt, now)),
             ),
+          );
+        return {
+          data: rows.filter((row) => !isStaffOnlyAudience(row.audience)),
         };
+      }
       case 'news': {
         const rows = await this.db
           .select()
@@ -481,8 +509,21 @@ export class ContentService {
               ),
             ),
         };
-      default:
-        return this.list(resource, schoolId);
+      default: {
+        // Inbox resources hold private submissions (names, phone numbers,
+        // message bodies) — never expose them through the public API.
+        if (resource === 'contactMessages' || resource === 'complaints')
+          return { data: [] };
+        // Every other resource honours its visibility flags here, exactly
+        // like the home payload does — switching a record off in the admin
+        // must also remove it from the public listing pages.
+        const { data } = await this.list(resource, schoolId);
+        return {
+          data: data.filter((row) =>
+            isPubliclyVisible(row as Record<string, unknown>),
+          ),
+        };
+      }
     }
   }
 
@@ -550,6 +591,19 @@ export class ContentService {
       .returning();
     if (!result[0]) throw new NotFoundException('কনটেন্ট পাওয়া যায়নি');
     return { data: result[0] };
+  }
+
+  async remove(resource: string, user: AuthUser, id: string) {
+    const table = this.table(resource);
+    const school = this.schoolColumn(resource as ContentResource);
+    if (!school)
+      throw new NotFoundException('কনটেন্টের প্রতিষ্ঠান নির্ধারণ করা যায়নি');
+    const result = await this.db
+      .delete(table)
+      .where(and(eq(table.id, id), eq(school, user.schoolId as never)))
+      .returning({ id: table.id });
+    if (!result[0]) throw new NotFoundException('কনটেন্ট পাওয়া যায়নি');
+    return { data: { id: result[0].id } };
   }
 
   async children(
@@ -660,5 +714,27 @@ export class ContentService {
       .where(eq(table.id, id))
       .returning();
     return { data: result[0] };
+  }
+
+  async removeChild(
+    kind: 'menuItems' | 'serviceBoxLinks' | 'galleryItems',
+    parentId: string,
+    id: string,
+    user: AuthUser,
+  ) {
+    const existing = await this.children(kind, parentId, user.schoolId);
+    const table =
+      kind === 'menuItems'
+        ? menuItems
+        : kind === 'serviceBoxLinks'
+          ? serviceBoxLinks
+          : galleryItems;
+    if (!existing.data.some((item) => item.id === id))
+      throw new NotFoundException('কনটেন্ট পাওয়া যায়নি');
+    const result = await this.db
+      .delete(table)
+      .where(eq(table.id, id))
+      .returning({ id: table.id });
+    return { data: { id: result[0]?.id ?? id } };
   }
 }

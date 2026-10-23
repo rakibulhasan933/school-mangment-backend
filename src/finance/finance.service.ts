@@ -1,17 +1,24 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
-import { and, asc, eq, gte, lte } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, lte } from 'drizzle-orm';
 import { createDb } from '../db/index.js';
 import {
+  academicClasses,
   feeEventClasses,
   feeEvents,
   ledgerEntries,
   payments,
   receipts,
   salaryRecords,
+  sections,
   studentFees,
   students,
   teachers,
+  users,
 } from '../db/schema.js';
 import type { AuthUser } from '../auth/auth.types.js';
 import {
@@ -25,12 +32,47 @@ import {
 export class FinanceService {
   private readonly db = createDb();
   async events(schoolId: string) {
+    const eventRows = await this.db
+      .select()
+      .from(feeEvents)
+      .where(eq(feeEvents.schoolId, schoolId))
+      .orderBy(asc(feeEvents.createdAt));
+    const chargeRows = await this.db
+      .select({
+        feeEventId: feeEventClasses.feeEventId,
+        classId: feeEventClasses.classId,
+        amount: feeEventClasses.amount,
+        classNameBn: academicClasses.nameBn,
+      })
+      .from(feeEventClasses)
+      .innerJoin(
+        academicClasses,
+        eq(academicClasses.id, feeEventClasses.classId),
+      );
+    const feeRows = await this.db
+      .select({
+        feeEventId: studentFees.feeEventId,
+        status: studentFees.status,
+      })
+      .from(studentFees)
+      .where(eq(studentFees.schoolId, schoolId));
     return {
-      data: await this.db
-        .select()
-        .from(feeEvents)
-        .where(eq(feeEvents.schoolId, schoolId))
-        .orderBy(asc(feeEvents.createdAt)),
+      data: eventRows.map((event) => {
+        const own = feeRows.filter((row) => row.feeEventId === event.id);
+        return {
+          ...event,
+          classes: chargeRows
+            .filter((row) => row.feeEventId === event.id)
+            .map((row) => ({
+              classId: row.classId,
+              classNameBn: row.classNameBn,
+              amount: row.amount,
+            })),
+          duesCount: own.length,
+          paidCount: own.filter((row) => row.status === 'PAID').length,
+          partialCount: own.filter((row) => row.status === 'PARTIAL').length,
+        };
+      }),
     };
   }
   async dues(
@@ -38,9 +80,21 @@ export class FinanceService {
     filter: { classId?: string; sectionId?: string; status?: string } = {},
   ) {
     const rows = await this.db
-      .select({ fee: studentFees, student: students })
+      .select({
+        fee: studentFees,
+        student: students,
+        studentNameBn: users.displayNameBn,
+        registrationNumber: users.registrationNumber,
+        classNameBn: academicClasses.nameBn,
+        sectionNameBn: sections.nameBn,
+        eventNameBn: feeEvents.nameBn,
+      })
       .from(studentFees)
       .innerJoin(students, eq(students.id, studentFees.studentId))
+      .innerJoin(users, eq(users.id, students.userId))
+      .innerJoin(feeEvents, eq(feeEvents.id, studentFees.feeEventId))
+      .leftJoin(academicClasses, eq(academicClasses.id, students.classId))
+      .leftJoin(sections, eq(sections.id, students.sectionId))
       .where(eq(studentFees.schoolId, schoolId))
       .orderBy(asc(studentFees.dueDate));
     return {
@@ -51,7 +105,14 @@ export class FinanceService {
             (!filter.sectionId || student.sectionId === filter.sectionId) &&
             (!filter.status || fee.status === filter.status),
         )
-        .map(({ fee }) => fee),
+        .map((row) => ({
+          ...row.fee,
+          studentNameBn: row.studentNameBn,
+          registrationNumber: row.registrationNumber,
+          classNameBn: row.classNameBn,
+          sectionNameBn: row.sectionNameBn,
+          eventNameBn: row.eventNameBn,
+        })),
     };
   }
   async createEvent(
@@ -149,8 +210,10 @@ export class FinanceService {
     value: {
       nameBn?: string;
       type?: string;
+      description?: string;
       dueDate?: string;
       lateFee?: number;
+      isPublished?: boolean;
       classes?: Array<{ classId: string; amount: number }>;
     },
   ) {
@@ -159,8 +222,14 @@ export class FinanceService {
       .set({
         ...(value.nameBn ? { nameBn: value.nameBn } : {}),
         ...(value.type ? { type: value.type } : {}),
+        ...(value.description !== undefined
+          ? { description: value.description }
+          : {}),
         ...(value.dueDate ? { dueDate: value.dueDate } : {}),
         ...(value.lateFee !== undefined ? { lateFee: value.lateFee } : {}),
+        ...(value.isPublished !== undefined
+          ? { isPublished: value.isPublished }
+          : {}),
         updatedAt: new Date(),
       })
       .where(
@@ -177,6 +246,23 @@ export class FinanceService {
         .values(
           value.classes.map((item) => ({ feeEventId: eventId, ...item })),
         );
+    }
+    if (value.isPublished) {
+      // Publishing through the edit form must generate dues just like the
+      // dedicated publish action (insert is conflict-safe).
+      const charges = await this.db
+        .select({
+          classId: feeEventClasses.classId,
+          amount: feeEventClasses.amount,
+        })
+        .from(feeEventClasses)
+        .where(eq(feeEventClasses.feeEventId, event.id));
+      await this.generateDues(
+        user.schoolId,
+        event.id,
+        charges,
+        event.dueDate,
+      );
     }
     return { data: event };
   }
@@ -310,12 +396,23 @@ export class FinanceService {
     };
   }
   async salaries(schoolId: string) {
+    const joined = await this.db
+      .select({
+        record: salaryRecords,
+        teacherNameBn: users.displayNameBn,
+        teacherCode: teachers.teacherCode,
+      })
+      .from(salaryRecords)
+      .innerJoin(teachers, eq(teachers.id, salaryRecords.teacherId))
+      .innerJoin(users, eq(users.id, teachers.userId))
+      .where(eq(salaryRecords.schoolId, schoolId))
+      .orderBy(asc(salaryRecords.salaryMonth));
     return {
-      data: await this.db
-        .select()
-        .from(salaryRecords)
-        .where(eq(salaryRecords.schoolId, schoolId))
-        .orderBy(asc(salaryRecords.salaryMonth)),
+      data: joined.map((row) => ({
+        ...row.record,
+        teacherNameBn: row.teacherNameBn,
+        teacherCode: row.teacherCode,
+      })),
     };
   }
   async studentDues(user: AuthUser) {
@@ -326,14 +423,33 @@ export class FinanceService {
         and(eq(students.schoolId, user.schoolId), eq(students.userId, user.id)),
       )
       .limit(1);
+    if (!student) return { data: [] };
+    // Join the fee event so the student portal can show the event name
+    // instead of a bare fee row; remainingAmount is derived, never stored.
+    const rows = await this.db
+      .select({
+        fee: studentFees,
+        eventNameBn: feeEvents.nameBn,
+        eventType: feeEvents.type,
+        eventDescription: feeEvents.description,
+      })
+      .from(studentFees)
+      .innerJoin(feeEvents, eq(feeEvents.id, studentFees.feeEventId))
+      .where(
+        and(
+          eq(studentFees.schoolId, user.schoolId),
+          eq(studentFees.studentId, student.id),
+        ),
+      )
+      .orderBy(asc(studentFees.dueDate));
     return {
-      data: student
-        ? await this.db
-            .select()
-            .from(studentFees)
-            .where(eq(studentFees.studentId, student.id))
-            .orderBy(asc(studentFees.dueDate))
-        : [],
+      data: rows.map((row) => ({
+        ...row.fee,
+        eventNameBn: row.eventNameBn,
+        eventType: row.eventType,
+        eventDescription: row.eventDescription,
+        remainingAmount: row.fee.amount - row.fee.paidAmount,
+      })),
     };
   }
   async studentPayments(user: AuthUser) {
@@ -344,14 +460,34 @@ export class FinanceService {
         and(eq(students.schoolId, user.schoolId), eq(students.userId, user.id)),
       )
       .limit(1);
+    if (!student) return { data: [] };
+    // Join the receipt + fee event so the portal can render a real receipt
+    // (receipt number / verify code / event name), newest payment first.
+    const rows = await this.db
+      .select({
+        payment: payments,
+        receiptNumber: receipts.receiptNumber,
+        verifyCode: receipts.verifyCode,
+        eventNameBn: feeEvents.nameBn,
+      })
+      .from(payments)
+      .innerJoin(receipts, eq(receipts.id, payments.receiptId))
+      .innerJoin(studentFees, eq(studentFees.id, payments.studentFeeId))
+      .innerJoin(feeEvents, eq(feeEvents.id, studentFees.feeEventId))
+      .where(
+        and(
+          eq(payments.schoolId, user.schoolId),
+          eq(payments.studentId, student.id),
+        ),
+      )
+      .orderBy(desc(payments.paidAt));
     return {
-      data: student
-        ? await this.db
-            .select()
-            .from(payments)
-            .where(eq(payments.studentId, student.id))
-            .orderBy(asc(payments.paidAt))
-        : [],
+      data: rows.map((row) => ({
+        ...row.payment,
+        receiptNumber: row.receiptNumber,
+        verifyCode: row.verifyCode,
+        eventNameBn: row.eventNameBn,
+      })),
     };
   }
   async teacherSalaries(user: AuthUser) {
@@ -383,6 +519,21 @@ export class FinanceService {
       method: string;
     },
   ) {
+    const [already] = await this.db
+      .select({ id: salaryRecords.id })
+      .from(salaryRecords)
+      .where(
+        and(
+          eq(salaryRecords.schoolId, user.schoolId),
+          eq(salaryRecords.teacherId, value.teacherId),
+          eq(salaryRecords.salaryMonth, value.salaryMonth),
+        ),
+      )
+      .limit(1);
+    if (already)
+      throw new BadRequestException(
+        'এই শিক্ষকের ওই মাসের বেতন ইতিমধ্যে পরিশোধ করা হয়েছে',
+      );
     const net = value.basic + (value.allowances ?? 0) - (value.deductions ?? 0);
     const [row] = await this.db
       .insert(salaryRecords)

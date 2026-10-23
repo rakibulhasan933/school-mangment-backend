@@ -1,12 +1,20 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { randomBytes } from 'node:crypto';
 import { and, asc, eq } from 'drizzle-orm';
+import * as argon2 from 'argon2';
 import { createDb } from '../db/index.js';
 import {
   academicClasses,
   academicSessions,
+  sections,
   staff,
   students,
   subjectAssignments,
+  subjects,
   teachers,
   users,
 } from '../db/schema.js';
@@ -19,14 +27,98 @@ type Resource = keyof typeof tables;
 export class PeopleService {
   private readonly db = createDb();
   async list(resource: Resource, schoolId: string, search?: string) {
-    const table = tables[resource];
-    const condition =
-      'schoolId' in table ? eq(table.schoolId, schoolId) : undefined;
-    const rows = await this.db
-      .select()
-      .from(table)
-      .where(condition as never)
-      .orderBy(asc(table.createdAt));
+    // List responses must carry human-readable display names. The bare rows
+    // only hold foreign-key UUIDs (a student's name lives on its user row),
+    // which is why the admin UI used to render raw UUIDs as "names".
+    let rows: Array<Record<string, unknown>>;
+    if (resource === 'students') {
+      const joined = await this.db
+        .select({
+          student: students,
+          nameBn: users.displayNameBn,
+          registrationNumber: users.registrationNumber,
+          classNameBn: academicClasses.nameBn,
+          sectionNameBn: sections.nameBn,
+          sessionName: academicSessions.name,
+        })
+        .from(students)
+        .innerJoin(users, eq(users.id, students.userId))
+        .leftJoin(
+          academicClasses,
+          eq(academicClasses.id, students.classId),
+        )
+        .leftJoin(sections, eq(sections.id, students.sectionId))
+        .leftJoin(
+          academicSessions,
+          eq(academicSessions.id, students.sessionId),
+        )
+        .where(eq(students.schoolId, schoolId))
+        .orderBy(asc(students.createdAt));
+      rows = joined.map((row) => ({
+        ...row.student,
+        nameBn: row.nameBn,
+        displayNameBn: row.nameBn,
+        registrationNumber: row.registrationNumber,
+        classNameBn: row.classNameBn,
+        sectionNameBn: row.sectionNameBn,
+        sessionName: row.sessionName,
+      }));
+    } else if (resource === 'teachers') {
+      const joined = await this.db
+        .select({
+          teacher: teachers,
+          nameBn: users.displayNameBn,
+          username: users.username,
+          email: users.email,
+        })
+        .from(teachers)
+        .innerJoin(users, eq(users.id, teachers.userId))
+        .where(eq(teachers.schoolId, schoolId))
+        .orderBy(asc(teachers.createdAt));
+      rows = joined.map((row) => ({
+        ...row.teacher,
+        nameBn: row.nameBn,
+        displayNameBn: row.nameBn,
+        username: row.username,
+        email: row.email,
+      }));
+    } else if (resource === 'subjectAssignments') {
+      const joined = await this.db
+        .select({
+          assignment: subjectAssignments,
+          teacherNameBn: users.displayNameBn,
+          teacherCode: teachers.teacherCode,
+          subjectNameBn: subjects.nameBn,
+          classNameBn: academicClasses.nameBn,
+          sectionNameBn: sections.nameBn,
+        })
+        .from(subjectAssignments)
+        .innerJoin(teachers, eq(teachers.id, subjectAssignments.teacherId))
+        .innerJoin(users, eq(users.id, teachers.userId))
+        .innerJoin(subjects, eq(subjects.id, subjectAssignments.subjectId))
+        .innerJoin(
+          academicClasses,
+          eq(academicClasses.id, subjectAssignments.classId),
+        )
+        .leftJoin(sections, eq(sections.id, subjectAssignments.sectionId))
+        .where(eq(subjectAssignments.schoolId, schoolId))
+        .orderBy(asc(subjectAssignments.createdAt));
+      rows = joined.map((row) => ({
+        ...row.assignment,
+        teacherNameBn: row.teacherNameBn,
+        teacherCode: row.teacherCode,
+        subjectNameBn: row.subjectNameBn,
+        classNameBn: row.classNameBn,
+        sectionNameBn: row.sectionNameBn,
+      }));
+    } else {
+      const table = tables[resource];
+      rows = (await this.db
+        .select()
+        .from(table)
+        .where(eq(table.schoolId, schoolId))
+        .orderBy(asc(table.createdAt))) as Array<Record<string, unknown>>;
+    }
     if (!search) return { data: rows };
     return {
       data: rows.filter((row) =>
@@ -102,12 +194,80 @@ export class PeopleService {
       .returning();
     return { data: { ...student, registrationNumber } };
   }
+  async createTeacher(user: AuthUser, value: Record<string, unknown>) {
+    const displayNameBn = String(
+      value.displayNameBn ?? value.nameBn ?? '',
+    ).trim();
+    if (!displayNameBn)
+      throw new BadRequestException('শিক্ষকের নাম আবশ্যক');
+    const existing = await this.db
+      .select({ teacherCode: teachers.teacherCode })
+      .from(teachers)
+      .where(eq(teachers.schoolId, user.schoolId));
+    const teacherCode =
+      String(value.teacherCode ?? '').trim() ||
+      `T-${String(existing.length + 1).padStart(3, '0')}`;
+    if (existing.some((row) => row.teacherCode === teacherCode))
+      throw new BadRequestException('এই শিক্ষক কোডটি ইতিমধ্যে ব্যবহৃত হয়েছে');
+    const username =
+      String(value.username ?? '').trim() ||
+      teacherCode.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    const providedPassword = String(value.password ?? '').trim();
+    const temporaryPassword =
+      providedPassword || `Teacher@${randomBytes(5).toString('hex')}`;
+    const [account] = await this.db
+      .insert(users)
+      .values({
+        schoolId: user.schoolId,
+        role: 'TEACHER',
+        username,
+        email: value.email ? String(value.email) : undefined,
+        passwordHash: await argon2.hash(temporaryPassword),
+        displayNameBn,
+      })
+      .returning();
+    if (!account) throw new Error('শিক্ষকের অ্যাকাউন্ট তৈরি করা যায়নি');
+    const [teacher] = await this.db
+      .insert(teachers)
+      .values({
+        schoolId: user.schoolId,
+        userId: account.id,
+        teacherCode,
+        nameEn: value.nameEn ? String(value.nameEn) : undefined,
+        designation: value.designation
+          ? String(value.designation)
+          : 'সহকারী শিক্ষক',
+        qualification: value.qualification
+          ? String(value.qualification)
+          : undefined,
+        mobile: value.mobile ? String(value.mobile) : undefined,
+        nid: value.nid ? String(value.nid) : undefined,
+        joiningDate: value.joiningDate ? String(value.joiningDate) : undefined,
+        monthlySalary: value.monthlySalary
+          ? Number(value.monthlySalary)
+          : 0,
+        photoUrl: value.photoUrl ? String(value.photoUrl) : undefined,
+      })
+      .returning();
+    return {
+      data: {
+        ...teacher,
+        nameBn: displayNameBn,
+        displayNameBn,
+        username,
+        // Returned once so the admin can hand the login to the teacher;
+        // afterwards only a reset (existing flow) can change it.
+        ...(providedPassword ? {} : { temporaryPassword }),
+      },
+    };
+  }
   async create(
     resource: Resource,
     user: AuthUser,
     value: Record<string, unknown>,
   ) {
     if (resource === 'students') return this.createStudent(user, value);
+    if (resource === 'teachers') return this.createTeacher(user, value);
     const table = tables[resource];
     const [row] = await this.db
       .insert(table)
@@ -122,12 +282,38 @@ export class PeopleService {
     value: Record<string, unknown>,
   ) {
     const table = tables[resource];
+    // A person's display name lives on the linked user row, not on the
+    // student/teacher row — route name edits there and strip the key so it
+    // never reaches the domain table update.
+    const { displayNameBn, nameBn, ...fields } = value;
+    const nextName = displayNameBn ?? nameBn;
     const [row] = await this.db
       .update(table)
-      .set({ ...value, updatedAt: new Date() } as never)
+      .set({ ...fields, updatedAt: new Date() } as never)
       .where(and(eq(table.id, id), eq(table.schoolId, user.schoolId) as never))
       .returning();
     if (!row) throw new NotFoundException('রেকর্ড পাওয়া যায়নি');
+    if (
+      nextName !== undefined &&
+      (resource === 'students' || resource === 'teachers')
+    ) {
+      await this.db
+        .update(users)
+        .set({ displayNameBn: String(nextName), updatedAt: new Date() })
+        .where(
+          eq(
+            users.id,
+            (row as { userId: string }).userId,
+          ),
+        );
+      return {
+        data: {
+          ...(row as Record<string, unknown>),
+          nameBn: String(nextName),
+          displayNameBn: String(nextName),
+        },
+      };
+    }
     return { data: row };
   }
   async promote(

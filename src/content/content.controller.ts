@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -44,6 +45,13 @@ export class ContentController {
     @Body() dto: ContentMutationDto,
   ) {
     return this.content.update(resource, request.user, id, dto.value);
+  }
+  @Delete(':resource/:id') @Roles('ADMIN') remove(
+    @Param('resource') resource: string,
+    @Req() request: AuthenticatedRequest,
+    @Param('id') id: string,
+  ) {
+    return this.content.remove(resource, request.user, id);
   }
   @Get(':parent/:parentId/items') @Roles('ADMIN') children(
     @Param('parent') parent: 'menus' | 'serviceBoxes' | 'galleries',
@@ -92,6 +100,20 @@ export class ContentController {
       request.user,
       dto.value,
     );
+  }
+  @Delete(':parent/:parentId/items/:id') @Roles('ADMIN') removeChild(
+    @Param('parent') parent: 'menus' | 'serviceBoxes' | 'galleries',
+    @Param('parentId') parentId: string,
+    @Req() request: AuthenticatedRequest,
+    @Param('id') id: string,
+  ) {
+    const kind =
+      parent === 'menus'
+        ? 'menuItems'
+        : parent === 'serviceBoxes'
+          ? 'serviceBoxLinks'
+          : 'galleryItems';
+    return this.content.removeChild(kind, parentId, id, request.user);
   }
 }
 

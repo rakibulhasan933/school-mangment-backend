@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -45,5 +46,13 @@ export class AcademicsController {
     @Body() dto: ContentMutationDto,
   ) {
     return this.academics.update(resource, req.user, id, dto.value);
+  }
+  @Delete(':resource/:id') remove(
+    @Param('resource')
+    resource: 'sessions' | 'classes' | 'sections' | 'subjects',
+    @Param('id') id: string,
+    @Req() req: AuthenticatedRequest,
+  ) {
+    return this.academics.remove(resource, req.user, id);
   }
 }
