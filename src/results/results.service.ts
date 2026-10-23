@@ -74,12 +74,141 @@ export class ResultsService {
     return { data: row };
   }
   async exams(schoolId: string) {
+    const joined = await this.db
+      .select({
+        exam: exams,
+        classNameBn: academicClasses.nameBn,
+        sessionName: academicSessions.name,
+        sessionYear: academicSessions.year,
+      })
+      .from(exams)
+      .innerJoin(academicClasses, eq(academicClasses.id, exams.classId))
+      .innerJoin(academicSessions, eq(academicSessions.id, exams.sessionId))
+      .where(eq(exams.schoolId, schoolId))
+      .orderBy(asc(exams.createdAt));
     return {
-      data: await this.db
-        .select()
-        .from(exams)
-        .where(eq(exams.schoolId, schoolId))
-        .orderBy(asc(exams.createdAt)),
+      data: joined.map((row) => ({
+        ...row.exam,
+        classNameBn: row.classNameBn,
+        sessionName: row.sessionName,
+        sessionYear: row.sessionYear,
+      })),
+    };
+  }
+  /** Exam subjects with subject names — feeds the exam form and marks entry. */
+  async examSubjectsList(schoolId: string, examId: string) {
+    const [exam] = await this.db
+      .select({ id: exams.id })
+      .from(exams)
+      .where(and(eq(exams.id, examId), eq(exams.schoolId, schoolId)))
+      .limit(1);
+    if (!exam) return { data: [] };
+    const joined = await this.db
+      .select({
+        config: examSubjects,
+        subjectNameBn: subjects.nameBn,
+      })
+      .from(examSubjects)
+      .innerJoin(subjects, eq(subjects.id, examSubjects.subjectId))
+      .where(eq(examSubjects.examId, examId))
+      .orderBy(asc(examSubjects.createdAt));
+    return {
+      data: joined.map((row) => ({
+        ...row.config,
+        subjectNameBn: row.subjectNameBn,
+      })),
+    };
+  }
+  /** Create or update one subject configuration of an exam. */
+  async saveExamSubject(
+    user: AuthUser,
+    value: {
+      examId: string;
+      subjectId: string;
+      fullMarks: number;
+      passMarks: number;
+      cqMarks?: number;
+      mcqMarks?: number;
+      practicalMarks?: number;
+    },
+  ) {
+    const [exam] = await this.db
+      .select({ id: exams.id })
+      .from(exams)
+      .where(and(eq(exams.id, value.examId), eq(exams.schoolId, user.schoolId)))
+      .limit(1);
+    if (!exam) throw new NotFoundException('পরীক্ষা পাওয়া যায়নি');
+    const fields = {
+      fullMarks: value.fullMarks,
+      passMarks: value.passMarks,
+      cqMarks: value.cqMarks ?? 0,
+      mcqMarks: value.mcqMarks ?? 0,
+      practicalMarks: value.practicalMarks ?? 0,
+    };
+    const [existing] = await this.db
+      .select({ id: examSubjects.id })
+      .from(examSubjects)
+      .where(
+        and(
+          eq(examSubjects.examId, value.examId),
+          eq(examSubjects.subjectId, value.subjectId),
+        ),
+      )
+      .limit(1);
+    const [row] = existing
+      ? await this.db
+          .update(examSubjects)
+          .set({ ...fields, updatedAt: new Date() })
+          .where(eq(examSubjects.id, existing.id))
+          .returning()
+      : await this.db
+          .insert(examSubjects)
+          .values({ examId: value.examId, subjectId: value.subjectId, ...fields })
+          .returning();
+    return { data: row };
+  }
+  async removeExamSubject(user: AuthUser, id: string) {
+    const [config] = await this.db
+      .select({ id: examSubjects.id, examId: examSubjects.examId })
+      .from(examSubjects)
+      .where(eq(examSubjects.id, id))
+      .limit(1);
+    if (!config) throw new NotFoundException('পরীক্ষার বিষয় পাওয়া যায়নি');
+    const [exam] = await this.db
+      .select({ id: exams.id })
+      .from(exams)
+      .where(and(eq(exams.id, config.examId), eq(exams.schoolId, user.schoolId)))
+      .limit(1);
+    if (!exam) throw new NotFoundException('পরীক্ষা পাওয়া যায়নি');
+    await this.db.delete(examSubjects).where(eq(examSubjects.id, id));
+    return { data: config };
+  }
+  /** Existing marks for one exam subject, with student display names. */
+  async marksList(schoolId: string, examSubjectId: string) {
+    const joined = await this.db
+      .select({
+        mark: marks,
+        studentNameBn: users.displayNameBn,
+        registrationNumber: users.registrationNumber,
+        roll: students.roll,
+      })
+      .from(marks)
+      .innerJoin(students, eq(students.id, marks.studentId))
+      .innerJoin(users, eq(users.id, students.userId))
+      .where(
+        and(
+          eq(marks.schoolId, schoolId),
+          eq(marks.examSubjectId, examSubjectId),
+        ),
+      )
+      .orderBy(asc(students.roll));
+    return {
+      data: joined.map((row) => ({
+        ...row.mark,
+        studentNameBn: row.studentNameBn,
+        registrationNumber: row.registrationNumber,
+        roll: row.roll,
+      })),
     };
   }
   async publish(
@@ -90,7 +219,13 @@ export class ResultsService {
     const [row] = await this.db
       .update(exams)
       .set({
-        isPublished: !value.publishAt,
+        // A scheduled publish keeps isPublished=true and lets the future
+        // publishAt gate visibility: every read path checks
+        // "isPublished AND (publishAt IS NULL OR publishAt <= now)", and
+        // examVisibility() reports such an exam as "scheduled" — so the
+        // result appears automatically when the time arrives, and the
+        // public countdown can see the exam in the meantime.
+        isPublished: true,
         publishAt: value.publishAt ? new Date(value.publishAt) : null,
         countdownEnabled: value.countdownEnabled ?? false,
         updatedAt: new Date(),
@@ -442,6 +577,18 @@ export class ResultsService {
             letter: resultSubjects.letter,
             gpa: resultSubjects.gpa,
             isAbsent: resultSubjects.isAbsent,
+            // Marksheet splits: the exam's configured component maxima come
+            // from exam_subjects; the student's obtained CQ/MCQ/Practical
+            // come from marks (left join — a processed result can exist
+            // even where a mark row was never entered).
+            fullMarks: examSubjects.fullMarks,
+            passMarks: examSubjects.passMarks,
+            cqMarks: examSubjects.cqMarks,
+            mcqMarks: examSubjects.mcqMarks,
+            practicalMarks: examSubjects.practicalMarks,
+            cq: marks.cq,
+            mcq: marks.mcq,
+            practical: marks.practical,
           })
           .from(resultSubjects)
           .innerJoin(
@@ -449,6 +596,13 @@ export class ResultsService {
             eq(resultSubjects.examSubjectId, examSubjects.id),
           )
           .innerJoin(subjects, eq(examSubjects.subjectId, subjects.id))
+          .leftJoin(
+            marks,
+            and(
+              eq(marks.examSubjectId, resultSubjects.examSubjectId),
+              eq(marks.studentId, row.result.studentId),
+            ),
+          )
           .where(eq(resultSubjects.resultId, row.result.id)),
       })),
     );

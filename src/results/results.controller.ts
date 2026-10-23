@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -59,6 +60,39 @@ export class ResultsController {
     @Body() body: { publishAt?: string; countdownEnabled?: boolean },
   ) {
     return this.results.publish(req.user, id, body);
+  }
+  @Get('exam-subjects') @Roles('ADMIN', 'TEACHER') examSubjects(
+    @Req() req: AuthenticatedRequest,
+    @Query('examId') examId: string,
+  ) {
+    return this.results.examSubjectsList(req.user.schoolId, examId);
+  }
+  @Post('exam-subjects') @Roles('ADMIN') saveExamSubject(
+    @Req() req: AuthenticatedRequest,
+    @Body()
+    body: {
+      examId: string;
+      subjectId: string;
+      fullMarks: number;
+      passMarks: number;
+      cqMarks?: number;
+      mcqMarks?: number;
+      practicalMarks?: number;
+    },
+  ) {
+    return this.results.saveExamSubject(req.user, body);
+  }
+  @Delete('exam-subjects/:id') @Roles('ADMIN') removeExamSubject(
+    @Req() req: AuthenticatedRequest,
+    @Param('id') id: string,
+  ) {
+    return this.results.removeExamSubject(req.user, id);
+  }
+  @Get('marks') @Roles('ADMIN', 'TEACHER') marks(
+    @Req() req: AuthenticatedRequest,
+    @Query('examSubjectId') examSubjectId: string,
+  ) {
+    return this.results.marksList(req.user.schoolId, examSubjectId);
   }
   @Post('marks') @Roles('ADMIN', 'TEACHER') mark(
     @Req() req: AuthenticatedRequest,

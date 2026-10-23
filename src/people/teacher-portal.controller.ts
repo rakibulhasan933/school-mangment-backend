@@ -5,6 +5,7 @@ import {
   academicClasses,
   routineEntries,
   sections,
+  subjectAssignments,
   subjects,
   teachers,
   users,
@@ -35,6 +36,44 @@ export class TeacherPortalController {
       )
       .limit(1);
     return { data: row ?? null };
+  }
+  @Get('assignments') async assignments(@Req() request: AuthenticatedRequest) {
+    const [teacher] = await this.db
+      .select({ id: teachers.id })
+      .from(teachers)
+      .where(
+        and(
+          eq(teachers.schoolId, request.user.schoolId),
+          eq(teachers.userId, request.user.id),
+        ),
+      )
+      .limit(1);
+    if (!teacher) return { data: [] };
+    const rows = await this.db
+      .select({
+        id: subjectAssignments.id,
+        subjectId: subjectAssignments.subjectId,
+        subjectNameBn: subjects.nameBn,
+        classId: subjectAssignments.classId,
+        classNameBn: academicClasses.nameBn,
+        sectionId: subjectAssignments.sectionId,
+        sectionNameBn: sections.nameBn,
+      })
+      .from(subjectAssignments)
+      .innerJoin(subjects, eq(subjects.id, subjectAssignments.subjectId))
+      .innerJoin(
+        academicClasses,
+        eq(academicClasses.id, subjectAssignments.classId),
+      )
+      .leftJoin(sections, eq(sections.id, subjectAssignments.sectionId))
+      .where(
+        and(
+          eq(subjectAssignments.schoolId, request.user.schoolId),
+          eq(subjectAssignments.teacherId, teacher.id),
+        ),
+      )
+      .orderBy(asc(academicClasses.orderIndex), asc(subjects.orderIndex));
+    return { data: rows };
   }
   @Get('routine') async routine(@Req() request: AuthenticatedRequest) {
     const [teacher] = await this.db

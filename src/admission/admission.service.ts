@@ -27,26 +27,44 @@ export class AdmissionService {
     return { data: row ?? null };
   }
   async saveSettings(user: AuthUser, value: Record<string, unknown>) {
+    // Partial saves must not wipe the rest: the admin's open/close toggle
+    // sends only { isOpen }, the window form sends only the dates. Any key
+    // absent from the payload keeps its stored value.
+    const [existing] = await this.db
+      .select()
+      .from(admissionSettings)
+      .where(eq(admissionSettings.schoolId, user.schoolId))
+      .limit(1);
+    const merged = {
+      isOpen:
+        value.isOpen !== undefined
+          ? Boolean(value.isOpen)
+          : (existing?.isOpen ?? false),
+      opensAt:
+        value.opensAt !== undefined
+          ? value.opensAt
+            ? new Date(String(value.opensAt))
+            : null
+          : (existing?.opensAt ?? null),
+      closesAt:
+        value.closesAt !== undefined
+          ? value.closesAt
+            ? new Date(String(value.closesAt))
+            : null
+          : (existing?.closesAt ?? null),
+      fields:
+        value.fields !== undefined ? value.fields : (existing?.fields ?? []),
+      seatCounts:
+        value.seatCounts !== undefined
+          ? value.seatCounts
+          : (existing?.seatCounts ?? {}),
+    };
     const [row] = await this.db
       .insert(admissionSettings)
-      .values({
-        schoolId: user.schoolId,
-        isOpen: Boolean(value.isOpen),
-        opensAt: value.opensAt ? new Date(String(value.opensAt)) : null,
-        closesAt: value.closesAt ? new Date(String(value.closesAt)) : null,
-        fields: value.fields ?? [],
-        seatCounts: value.seatCounts ?? {},
-      })
+      .values({ schoolId: user.schoolId, ...merged })
       .onConflictDoUpdate({
         target: admissionSettings.schoolId,
-        set: {
-          isOpen: Boolean(value.isOpen),
-          opensAt: value.opensAt ? new Date(String(value.opensAt)) : null,
-          closesAt: value.closesAt ? new Date(String(value.closesAt)) : null,
-          fields: value.fields ?? [],
-          seatCounts: value.seatCounts ?? {},
-          updatedAt: new Date(),
-        },
+        set: { ...merged, updatedAt: new Date() },
       })
       .returning();
     return { data: row };

@@ -109,6 +109,7 @@ export class RoutineController {
         subjectNameBn: subjects.nameBn,
         teacherId: routineEntries.teacherId,
         teacherCode: teachers.teacherCode,
+        teacherNameBn: users.displayNameBn,
       })
       .from(routineEntries)
       .innerJoin(
@@ -118,6 +119,7 @@ export class RoutineController {
       .leftJoin(sections, eq(sections.id, routineEntries.sectionId))
       .leftJoin(subjects, eq(subjects.id, routineEntries.subjectId))
       .leftJoin(teachers, eq(teachers.id, routineEntries.teacherId))
+      .leftJoin(users, eq(users.id, teachers.userId))
       .where(eq(routineEntries.schoolId, schoolId))
       .orderBy(asc(routineEntries.dayOfWeek), asc(routineEntries.period));
   }

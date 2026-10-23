@@ -1,7 +1,8 @@
 import { ForbiddenException, Injectable } from '@nestjs/common';
-import { and, asc, eq, gte, lte } from 'drizzle-orm';
+import { and, asc, eq, gte, inArray, lte } from 'drizzle-orm';
 import { createDb } from '../db/index.js';
 import {
+  academicSessions,
   attendance,
   settings,
   subjectAssignments,
@@ -44,6 +45,28 @@ export class AttendanceService {
     };
   }
   async save(user: AuthUser, body: AttendanceInput) {
+    // Teachers cannot read the ADMIN-only academics endpoints, so a missing
+    // session falls back to the school's current session.
+    if (!body.sessionId) {
+      const [current] = await this.db
+        .select({ id: academicSessions.id })
+        .from(academicSessions)
+        .where(
+          and(
+            eq(academicSessions.schoolId, user.schoolId),
+            eq(academicSessions.isCurrent, true),
+          ),
+        )
+        .limit(1);
+      const [fallback] = current
+        ? [current]
+        : await this.db
+            .select({ id: academicSessions.id })
+            .from(academicSessions)
+            .where(eq(academicSessions.schoolId, user.schoolId))
+            .limit(1);
+      if (fallback) body = { ...body, sessionId: fallback.id };
+    }
     if (user.role === 'TEACHER') {
       const today = new Date().toISOString().slice(0, 10);
       if (body.date !== today)
@@ -144,6 +167,29 @@ export class AttendanceService {
       if (record.status === 'PRESENT') student.present += 1;
       studentTotals.set(record.studentId, student);
     }
+    const lowRows = [...studentTotals].filter(
+      ([, value]) =>
+        value.total > 0 && (value.present * 100) / value.total < threshold,
+    );
+    const lowIds = lowRows.map(([studentId]) => studentId);
+    const lowStudents = lowIds.length
+      ? await this.db
+          .select({
+            id: students.id,
+            nameBn: users.displayNameBn,
+            registrationNumber: users.registrationNumber,
+            roll: students.roll,
+          })
+          .from(students)
+          .innerJoin(users, eq(users.id, students.userId))
+          .where(
+            and(
+              eq(students.schoolId, schoolId),
+              inArray(students.id, lowIds),
+            ),
+          )
+      : [];
+    const lowById = new Map(lowStudents.map((row) => [row.id, row]));
     return {
       data: records,
       dailySummary: [...daily].map(([date, value]) => ({
@@ -160,16 +206,14 @@ export class AttendanceService {
         }),
         { present: 0, total: 0 },
       ),
-      lowAttendance: [...studentTotals]
-        .filter(
-          ([, value]) =>
-            value.total > 0 && (value.present * 100) / value.total < threshold,
-        )
-        .map(([studentId, value]) => ({
-          studentId,
-          ...value,
-          percentage: Math.round((value.present * 10000) / value.total) / 100,
-        })),
+      lowAttendance: lowRows.map(([studentId, value]) => ({
+        studentId,
+        studentNameBn: lowById.get(studentId)?.nameBn ?? null,
+        registrationNumber: lowById.get(studentId)?.registrationNumber ?? null,
+        roll: lowById.get(studentId)?.roll ?? null,
+        ...value,
+        percentage: Math.round((value.present * 10000) / value.total) / 100,
+      })),
       threshold,
     };
   }
