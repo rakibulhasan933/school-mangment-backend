@@ -3,9 +3,20 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { and, asc, eq, inArray, lte, or, isNull } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  inArray,
+  lte,
+  or,
+  isNull,
+} from 'drizzle-orm';
 import { createDb } from '../db/index.js';
 import {
+  academicClasses,
+  academicSessions,
   examSubjects,
   exams,
   gradingScales,
@@ -22,6 +33,7 @@ import {
   validateScale,
   type GradeScale,
 } from './processing.js';
+import { examVisibility } from './public.js';
 
 @Injectable()
 export class ResultsService {
@@ -287,6 +299,93 @@ export class ResultsService {
     }
     return { data: { processed: processed.length, examId, classId } };
   }
+  /** Public exam list: published + scheduled exams only (never hidden). */
+  async publicExams(schoolId: string) {
+    const now = new Date();
+    const rows = await this.db
+      .select({
+        id: exams.id,
+        nameBn: exams.nameBn,
+        classId: exams.classId,
+        classNameBn: academicClasses.nameBn,
+        sessionYear: academicSessions.year,
+        publishAt: exams.publishAt,
+        isPublished: exams.isPublished,
+      })
+      .from(exams)
+      .innerJoin(academicSessions, eq(exams.sessionId, academicSessions.id))
+      .leftJoin(academicClasses, eq(exams.classId, academicClasses.id))
+      .where(eq(exams.schoolId, schoolId))
+      .orderBy(asc(exams.createdAt));
+    return {
+      data: rows.flatMap((row) => {
+        const status = examVisibility(row, now);
+        if (status === 'hidden') return [];
+        return [
+          {
+            id: row.id,
+            nameBn: row.nameBn,
+            sessionYear: row.sessionYear,
+            classId: row.classId,
+            classNameBn: row.classNameBn,
+            publishAt: row.publishAt,
+            status,
+          },
+        ];
+      }),
+    };
+  }
+
+  /**
+   * Class-wise published results. Without an examId the most recent
+   * published exam is used. Rows are only ever returned while the exam
+   * is publicly visible (published and publishAt reached).
+   */
+  async publicList(schoolId: string, examId?: string, classId?: string) {
+    let targetExamId = examId;
+    if (!targetExamId) {
+      const [latest] = await this.db
+        .select({ id: exams.id })
+        .from(exams)
+        .where(
+          and(
+            eq(exams.schoolId, schoolId),
+            eq(exams.isPublished, true),
+            or(isNull(exams.publishAt), lte(exams.publishAt, new Date())),
+          ),
+        )
+        .orderBy(desc(exams.createdAt))
+        .limit(1);
+      if (!latest) return { data: [], examId: null };
+      targetExamId = latest.id;
+    }
+    const conditions = [
+      eq(results.schoolId, schoolId),
+      eq(results.examId, targetExamId),
+      eq(exams.isPublished, true),
+      or(isNull(exams.publishAt), lte(exams.publishAt, new Date())),
+    ];
+    if (classId) conditions.push(eq(results.classId, classId));
+    const rows = await this.db
+      .select({
+        registrationNumber: users.registrationNumber,
+        nameBn: users.displayNameBn,
+        classId: results.classId,
+        totalMarks: results.totalMarks,
+        gpa: results.gpa,
+        letter: results.letter,
+        meritPosition: results.meritPosition,
+        isPassed: results.isPassed,
+      })
+      .from(results)
+      .innerJoin(exams, eq(results.examId, exams.id))
+      .innerJoin(students, eq(results.studentId, students.id))
+      .innerJoin(users, eq(students.userId, users.id))
+      .where(and(...conditions))
+      .orderBy(asc(results.meritPosition), desc(results.totalMarks));
+    return { data: rows, examId: targetExamId };
+  }
+
   async publicSearch(
     schoolId: string,
     registrationNumber: string,

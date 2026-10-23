@@ -1,14 +1,28 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { and, asc, eq, gt, inArray, isNull, lte, or, sql } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gt,
+  inArray,
+  isNull,
+  lte,
+  or,
+  sql,
+} from 'drizzle-orm';
 import { createDb } from '../db/index.js';
 import {
   banners,
+  committee,
   complaints,
   contactMessages,
   downloads,
   events,
+  exams,
   galleries,
   galleryItems,
+  holidays,
   homepageBlocks,
   importantLinks,
   menuItems,
@@ -18,14 +32,17 @@ import {
   notices,
   pages,
   quotes,
+  results,
   schools,
   serviceBoxes,
   serviceBoxLinks,
   students,
   teachers,
   users,
+  videos,
 } from '../db/schema.js';
 import type { AuthUser } from '../auth/auth.types.js';
+import { pickMeritorious } from '../results/public.js';
 
 const resources = {
   pages,
@@ -43,6 +60,9 @@ const resources = {
   menus,
   contactMessages,
   complaints,
+  holidays,
+  videos,
+  committee,
 } as const;
 export type ContentResource = keyof typeof resources;
 
@@ -86,6 +106,8 @@ export class ContentService {
           address: schools.address,
           foundedYear: schools.foundedYear,
           logoUrl: schools.logoUrl,
+          phone: schools.phone,
+          email: schools.email,
         })
         .from(schools)
         .where(eq(schools.id, schoolId))
@@ -218,39 +240,22 @@ export class ContentService {
           .from(teachers)
           .where(eq(teachers.schoolId, schoolId)),
       ]);
-    const [teacherRows, studentRows] = await Promise.all([
-      this.db
-        .select({
-          id: users.id,
-          nameBn: users.displayNameBn,
-          username: users.username,
-        })
-        .from(users)
-        .where(
-          and(
-            eq(users.schoolId, schoolId),
-            eq(users.role, 'TEACHER'),
-            eq(users.isActive, true),
-          ),
-        )
-        .limit(8),
-      this.db
-        .select({
-          id: users.id,
-          nameBn: users.displayNameBn,
-          registrationNumber: users.registrationNumber,
-        })
-        .from(users)
-        .where(
-          and(
-            eq(users.schoolId, schoolId),
-            eq(users.role, 'STUDENT'),
-            eq(users.isActive, true),
-          ),
-        )
-        .orderBy(asc(users.registrationNumber))
-        .limit(6),
-    ]);
+    const teacherRows = await this.db
+      .select({
+        id: users.id,
+        nameBn: users.displayNameBn,
+        username: users.username,
+      })
+      .from(users)
+      .where(
+        and(
+          eq(users.schoolId, schoolId),
+          eq(users.role, 'TEACHER'),
+          eq(users.isActive, true),
+        ),
+      )
+      .limit(8);
+    const studentRows = await this.meritoriousStudents(schoolId, now);
     return {
       data: {
         school: schoolRows[0],
@@ -277,6 +282,76 @@ export class ContentService {
         messages: messageRows,
       },
     };
+  }
+
+  /**
+   * Meritorious students are derived from the most recent published exam:
+   * its processed results, best first. Before any result is published the
+   * section falls back to the first active students (without marks).
+   */
+  private async meritoriousStudents(schoolId: string, now: Date) {
+    const [latestExam] = await this.db
+      .select({ id: exams.id })
+      .from(exams)
+      .where(
+        and(
+          eq(exams.schoolId, schoolId),
+          eq(exams.isPublished, true),
+          or(isNull(exams.publishAt), lte(exams.publishAt, now)),
+        ),
+      )
+      .orderBy(desc(exams.createdAt))
+      .limit(1);
+    if (latestExam) {
+      const rows = await this.db
+        .select({
+          id: users.id,
+          nameBn: users.displayNameBn,
+          registrationNumber: users.registrationNumber,
+          photoUrl: students.photoUrl,
+          totalMarks: results.totalMarks,
+          gpa: results.gpa,
+          meritPosition: results.meritPosition,
+        })
+        .from(results)
+        .innerJoin(students, eq(results.studentId, students.id))
+        .innerJoin(users, eq(students.userId, users.id))
+        .where(
+          and(
+            eq(results.schoolId, schoolId),
+            eq(results.examId, latestExam.id),
+            eq(users.isActive, true),
+          ),
+        );
+      if (rows.length)
+        return pickMeritorious(rows, 6).map((row) => ({
+          id: row.id,
+          nameBn: row.nameBn,
+          registrationNumber: row.registrationNumber,
+          photoUrl: row.photoUrl,
+          totalMarks: row.totalMarks,
+          gpa: row.gpa,
+        }));
+    }
+    const fallback = await this.db
+      .select({
+        id: users.id,
+        nameBn: users.displayNameBn,
+        registrationNumber: users.registrationNumber,
+        photoUrl: students.photoUrl,
+      })
+      .from(users)
+      .leftJoin(students, eq(students.userId, users.id))
+      .where(
+        and(
+          eq(users.schoolId, schoolId),
+          eq(users.role, 'STUDENT'),
+          eq(users.isActive, true),
+        ),
+      )
+      .orderBy(asc(users.registrationNumber))
+      .limit(6);
+    return fallback.map((row) => ({ ...row, totalMarks: null, gpa: null }));
   }
 
   async list(resource: string, schoolId: string) {
@@ -317,26 +392,82 @@ export class ContentService {
               ),
             ),
         };
-      case 'news':
-        return {
-          data: await this.db
-            .select()
-            .from(news)
-            .where(
-              and(eq(news.schoolId, schoolId), eq(news.isPublished, true)),
+      case 'news': {
+        const rows = await this.db
+          .select()
+          .from(news)
+          .where(and(eq(news.schoolId, schoolId), eq(news.isPublished, true)));
+        return { data: rows.map((row) => ({ ...row, body: row.details })) };
+      }
+      case 'galleries': {
+        const rows = await this.db
+          .select()
+          .from(galleries)
+          .where(
+            and(
+              eq(galleries.schoolId, schoolId),
+              eq(galleries.isPublished, true),
             ),
+          );
+        const items = rows.length
+          ? await this.db
+              .select()
+              .from(galleryItems)
+              .where(
+                inArray(
+                  galleryItems.galleryId,
+                  rows.map((row) => row.id),
+                ),
+              )
+              .orderBy(asc(galleryItems.orderIndex))
+          : [];
+        return {
+          data: rows.map((row) => ({
+            ...row,
+            items: items.filter((item) => item.galleryId === row.id),
+          })),
         };
-      case 'galleries':
+      }
+      case 'holidays': {
+        const rows = await this.db
+          .select()
+          .from(holidays)
+          .where(
+            and(eq(holidays.schoolId, schoolId), eq(holidays.isPublished, true)),
+          )
+          .orderBy(asc(holidays.fromDate));
+        return {
+          data: rows.map((row) => ({
+            ...row,
+            dayCount:
+              Math.round(
+                (Date.parse(row.toDate) - Date.parse(row.fromDate)) / 86400000,
+              ) + 1,
+          })),
+        };
+      }
+      case 'videos':
         return {
           data: await this.db
             .select()
-            .from(galleries)
+            .from(videos)
+            .where(
+              and(eq(videos.schoolId, schoolId), eq(videos.isPublished, true)),
+            )
+            .orderBy(desc(videos.publishedAt)),
+        };
+      case 'committee':
+        return {
+          data: await this.db
+            .select()
+            .from(committee)
             .where(
               and(
-                eq(galleries.schoolId, schoolId),
-                eq(galleries.isPublished, true),
+                eq(committee.schoolId, schoolId),
+                eq(committee.isPublished, true),
               ),
-            ),
+            )
+            .orderBy(asc(committee.orderIndex)),
         };
       case 'downloads':
         return {
@@ -353,6 +484,25 @@ export class ContentService {
       default:
         return this.list(resource, schoolId);
     }
+  }
+
+  /** Single published item read for public detail pages (news today). */
+  async publicOne(resource: string, schoolId: string, id: string) {
+    if (resource !== 'news')
+      throw new NotFoundException('কনটেন্টের ধরন পাওয়া যায়নি');
+    const [row] = await this.db
+      .select()
+      .from(news)
+      .where(
+        and(
+          eq(news.schoolId, schoolId),
+          eq(news.id, id),
+          eq(news.isPublished, true),
+        ),
+      )
+      .limit(1);
+    if (!row) throw new NotFoundException('খবর পাওয়া যায়নি');
+    return { data: { ...row, body: row.details } };
   }
 
   async create(

@@ -11,6 +11,7 @@ import {
   admissionSettings,
   attendance,
   banners,
+  committee,
   downloads,
   events,
   examSubjects,
@@ -20,6 +21,7 @@ import {
   galleries,
   galleryItems,
   gradingScales,
+  holidays,
   homepageBlocks,
   importantLinks,
   ledgerEntries,
@@ -46,6 +48,7 @@ import {
   subjects,
   teachers,
   users,
+  videos,
 } from '../src/db/schema.js';
 import {
   processStudentResult,
@@ -100,6 +103,8 @@ async function seed(db: SeedDb) {
       address: 'কুড়িগ্রাম সদর, কুড়িগ্রাম',
       foundedYear: '1985',
       themeColor: '#21699D',
+      phone: '01700000000',
+      email: 'info@adarshamodel.edu.bd',
     })
     .onConflictDoUpdate({
       target: schools.eiin,
@@ -109,6 +114,8 @@ async function seed(db: SeedDb) {
         address: 'কুড়িগ্রাম সদর, কুড়িগ্রাম',
         foundedYear: '1985',
         themeColor: '#21699D',
+        phone: '01700000000',
+        email: 'info@adarshamodel.edu.bd',
         updatedAt: new Date(),
       },
     })
@@ -285,13 +292,30 @@ async function seed(db: SeedDb) {
       teacherAccounts.find((account) => account.email === email)?.id ??
       fixedUuid(900 + index),
     teacherCode: `T-${String(index + 1).padStart(3, '0')}`,
-    designation: 'সহকারী শিক্ষক',
-    qualification: 'স্নাতক',
+    designation:
+      index === 0
+        ? 'প্রধান শিক্ষক'
+        : index === 1
+          ? 'সহকারী প্রধান শিক্ষক'
+          : 'সহকারী শিক্ষক',
+    qualification: index < 2 ? 'স্নাতকোত্তর' : 'স্নাতক',
     mobile: `0170000000${index}`,
     joiningDate: '2020-01-01',
     monthlySalary: 2500000,
+    photoUrl: 'https://placehold.co/240x240/21699D/FFFFFF?text=Teacher',
   }));
-  await db.insert(teachers).values(teacherValues).onConflictDoNothing();
+  await db
+    .insert(teachers)
+    .values(teacherValues)
+    .onConflictDoUpdate({
+      target: [teachers.schoolId, teachers.teacherCode],
+      set: {
+        designation: sql`excluded.designation`,
+        qualification: sql`excluded.qualification`,
+        photoUrl: sql`excluded.photo_url`,
+        updatedAt: new Date(),
+      },
+    });
   const savedTeachers = await db
     .select({ id: teachers.id, teacherCode: teachers.teacherCode })
     .from(teachers)
@@ -815,7 +839,76 @@ async function seed(db: SeedDb) {
       isEnabled: true,
     })
     .onConflictDoNothing();
-  progress('content resources', 12);
+  const holidayValues = [
+    ['শহীদ দিবস ও আন্তর্জাতিক মাতৃভাষা দিবস', '2026-02-21', '2026-02-21'],
+    ['জাতির পিতার জন্মদিন ও জাতীয় শিশু দিবস', '2026-03-17', '2026-03-17'],
+    ['পবিত্র ঈদুল ফিতর', '2026-03-20', '2026-03-24'],
+    ['স্বাধীনতা ও জাতীয় দিবস', '2026-03-26', '2026-03-26'],
+    ['বাংলা নববর্ষ', '2026-04-14', '2026-04-14'],
+    ['মে দিবস', '2026-05-01', '2026-05-01'],
+    ['পবিত্র ঈদুল আজহা', '2026-05-27', '2026-05-31'],
+    ['মহান বিজয় দিবস', '2026-12-16', '2026-12-16'],
+  ] as const;
+  await db
+    .insert(holidays)
+    .values(
+      holidayValues.map(([titleBn, fromDate, toDate], index) => ({
+        id: `10000000-0000-4000-8000-0000000000c${index + 1}`,
+        schoolId: school.id,
+        titleBn,
+        fromDate,
+        toDate,
+        isPublished: true,
+      })),
+    )
+    .onConflictDoNothing();
+  progress('holidays', holidayValues.length);
+  const videoValues = [
+    'বার্ষিক ক্রীড়া প্রতিযোগিতা',
+    'বিজ্ঞান মেলা ও প্রদর্শনী',
+    'বার্ষিক সাংস্কৃতিক অনুষ্ঠান',
+    'মিলাদ ও দোয়া মাহফিল',
+  ];
+  await db
+    .insert(videos)
+    .values(
+      videoValues.map((titleBn, index) => ({
+        id: `10000000-0000-4000-8000-0000000000d${index + 1}`,
+        schoolId: school.id,
+        titleBn,
+        thumbnailUrl:
+          'https://placehold.co/640x360/0F3151/FFFFFF?text=Video',
+        videoUrl: `https://example.org/videos/demo-${index + 1}`,
+        publishedAt: new Date(),
+        isPublished: true,
+      })),
+    )
+    .onConflictDoNothing();
+  progress('videos', videoValues.length);
+  const committeeValues = [
+    ['মোঃ আব্দুল করিম', 'সভাপতি'],
+    ['বেগম শাহানা পারভীন', 'সহ-সভাপতি'],
+    ['মোঃ নজরুল ইসলাম', 'সদস্য সচিব'],
+    ['মোঃ হারুন অর রশীদ', 'সদস্য (শিক্ষক প্রতিনিধি)'],
+    ['মোসাঃ রোকেয়া বেগম', 'সদস্য (অভিভাবক প্রতিনিধি)'],
+    ['মোঃ সাইফুল ইসলাম', 'সদস্য (অভিভাবক প্রতিনিধি)'],
+  ] as const;
+  await db
+    .insert(committee)
+    .values(
+      committeeValues.map(([nameBn, roleBn], index) => ({
+        id: `10000000-0000-4000-8000-0000000000e${index + 1}`,
+        schoolId: school.id,
+        nameBn,
+        roleBn,
+        photoUrl: 'https://placehold.co/200x200/21699D/FFFFFF?text=Member',
+        orderIndex: index,
+        isPublished: true,
+      })),
+    )
+    .onConflictDoNothing();
+  progress('committee members', committeeValues.length);
+  progress('content resources', 15);
   await db
     .insert(admissionSettings)
     .values({

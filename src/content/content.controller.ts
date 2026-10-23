@@ -101,6 +101,16 @@ export class PublicContentController {
   @Get('home') home(@Query('schoolId') schoolId?: string) {
     return this.content.home(schoolId ?? process.env.DEFAULT_SCHOOL_ID ?? '');
   }
+  @Get('news/:id') newsDetail(
+    @Param('id') id: string,
+    @Query('schoolId') schoolId?: string,
+  ) {
+    return this.content.publicOne(
+      'news',
+      schoolId ?? process.env.DEFAULT_SCHOOL_ID ?? '',
+      id,
+    );
+  }
   @Get(':resource') list(
     @Param('resource') resource: string,
     @Query('schoolId') schoolId?: string,

@@ -54,11 +54,13 @@ export class PublicAttendanceController {
     @Query('schoolId') schoolId: string,
     @Query('classId') classId?: string,
     @Query('sectionId') sectionId?: string,
+    @Query('date') date?: string,
   ) {
     return this.attendance.public(
       schoolId ?? process.env.DEFAULT_SCHOOL_ID ?? '',
       classId,
       sectionId,
+      date,
     );
   }
 }

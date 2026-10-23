@@ -1,9 +1,17 @@
-import type { Request, Response } from 'express';
 import { createApplication } from '../src/bootstrap.js';
+
+type VercelRequest = { url?: string };
+type VercelResponse = {
+  status(code: number): VercelResponse;
+  json(body: unknown): VercelResponse;
+};
 
 let application: ReturnType<typeof createApplication> | undefined;
 
-export default async function handler(request: Request, response: Response) {
+export default async function handler(
+  request: VercelRequest,
+  response: VercelResponse,
+) {
   try {
     const requestPath = request.url?.split('?')[0];
     if (requestPath === '/') {
@@ -17,9 +25,9 @@ export default async function handler(request: Request, response: Response) {
 
     application ??= createApplication();
     const app = await application;
-    const expressInstance = app.getHttpAdapter().getInstance() as (
-      req: Request,
-      res: Response,
+    const expressInstance = app.getHttpAdapter().getInstance() as unknown as (
+      req: VercelRequest,
+      res: VercelResponse,
     ) => void;
     expressInstance(request, response);
   } catch (error: unknown) {

@@ -1,4 +1,5 @@
 import {
+  IsEmail,
   IsHexColor,
   IsObject,
   IsOptional,
@@ -13,6 +14,8 @@ export class UpdateSettingsDto {
   @IsOptional() @IsString() @MaxLength(500) address?: string;
   @IsOptional() @IsString() @MaxLength(4) foundedYear?: string;
   @IsOptional() @IsString() @MaxLength(500) logoUrl?: string;
+  @IsOptional() @IsString() @MaxLength(30) phone?: string;
+  @IsOptional() @IsEmail() @MaxLength(200) email?: string;
   @IsOptional() @IsHexColor() themeColor?: string;
   @IsOptional() @IsObject() settings?: Record<string, unknown>;
 }

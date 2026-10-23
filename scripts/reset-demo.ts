@@ -19,6 +19,7 @@ const queries = [
   "delete from salary_records where school_id = (select id from schools where eiin = '123456')",
   "delete from ledger_entries where school_id = (select id from schools where eiin = '123456')",
   "delete from fee_events where school_id = (select id from schools where eiin = '123456')",
+  "delete from routine_entries where school_id = (select id from schools where eiin = '123456')",
   "delete from subject_assignments where school_id = (select id from schools where eiin = '123456')",
   "delete from grading_scales where school_id = (select id from schools where eiin = '123456')",
   "delete from exams where school_id = (select id from schools where eiin = '123456')",
@@ -48,6 +49,9 @@ const queries = [
   "delete from academic_classes where school_id = (select id from schools where eiin = '123456')",
   "delete from academic_sessions where school_id = (select id from schools where eiin = '123456')",
   "delete from ledger_categories where school_id = (select id from schools where eiin = '123456')",
+  "delete from holidays where school_id = (select id from schools where eiin = '123456')",
+  "delete from videos where school_id = (select id from schools where eiin = '123456')",
+  "delete from committee_members where school_id = (select id from schools where eiin = '123456')",
   "delete from users where school_id = (select id from schools where eiin = '123456')",
   "delete from schools where eiin = '123456'",
 ];
