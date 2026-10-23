@@ -1,5 +1,6 @@
 import {
   boolean,
+  date,
   integer,
   jsonb,
   pgEnum,
@@ -31,6 +32,8 @@ export const schools = pgTable(
     address: text('address').notNull().default(''),
     foundedYear: text('founded_year'),
     logoUrl: text('logo_url'),
+    phone: text('phone'),
+    email: text('email'),
     themeColor: text('theme_color').notNull().default('#21699D'),
     isActive: boolean('is_active').notNull().default(true),
     ...timestamps,
@@ -266,6 +269,41 @@ export const importantLinks = pgTable('important_links', {
   url: text('url').notNull(),
   orderIndex: integer('order_index').notNull().default(0),
   isEnabled: boolean('is_enabled').notNull().default(true),
+  ...contentTimestamps,
+});
+export const holidays = pgTable('holidays', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  schoolId: uuid('school_id')
+    .notNull()
+    .references(() => schools.id),
+  titleBn: text('title_bn').notNull(),
+  fromDate: date('from_date').notNull(),
+  toDate: date('to_date').notNull(),
+  isPublished: boolean('is_published').notNull().default(false),
+  ...contentTimestamps,
+});
+export const videos = pgTable('videos', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  schoolId: uuid('school_id')
+    .notNull()
+    .references(() => schools.id),
+  titleBn: text('title_bn').notNull(),
+  thumbnailUrl: text('thumbnail_url'),
+  videoUrl: text('video_url').notNull(),
+  publishedAt: timestamp('published_at', { withTimezone: true }),
+  isPublished: boolean('is_published').notNull().default(false),
+  ...contentTimestamps,
+});
+export const committee = pgTable('committee_members', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  schoolId: uuid('school_id')
+    .notNull()
+    .references(() => schools.id),
+  nameBn: text('name_bn').notNull(),
+  roleBn: text('role_bn').notNull(),
+  photoUrl: text('photo_url'),
+  orderIndex: integer('order_index').notNull().default(0),
+  isPublished: boolean('is_published').notNull().default(false),
   ...contentTimestamps,
 });
 export const quotes = pgTable('quotes', {

@@ -173,10 +173,16 @@ export class AttendanceService {
       threshold,
     };
   }
-  async public(schoolId: string, classId?: string, sectionId?: string) {
+  async public(
+    schoolId: string,
+    classId?: string,
+    sectionId?: string,
+    date?: string,
+  ) {
     const conditions = [eq(attendance.schoolId, schoolId)];
     if (classId) conditions.push(eq(attendance.classId, classId));
     if (sectionId) conditions.push(eq(attendance.sectionId, sectionId));
+    if (date) conditions.push(eq(attendance.attendanceDate, date));
     return {
       data: await this.db
         .select({

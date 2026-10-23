@@ -98,6 +98,17 @@ export class ResultsController {
 @Controller('public/results')
 export class PublicResultsController {
   constructor(private readonly results: ResultsService) {}
+  @Get() list(
+    @Query('schoolId') schoolId: string,
+    @Query('examId') examId?: string,
+    @Query('classId') classId?: string,
+  ) {
+    return this.results.publicList(
+      schoolId ?? process.env.DEFAULT_SCHOOL_ID ?? '',
+      examId,
+      classId,
+    );
+  }
   @Get('search') search(
     @Query('schoolId') schoolId: string,
     @Query('registrationNumber') registrationNumber: string,
@@ -107,6 +118,16 @@ export class PublicResultsController {
       schoolId ?? process.env.DEFAULT_SCHOOL_ID ?? '',
       registrationNumber,
       examId,
+    );
+  }
+}
+
+@Controller('public/exams')
+export class PublicExamsController {
+  constructor(private readonly results: ResultsService) {}
+  @Get() list(@Query('schoolId') schoolId?: string) {
+    return this.results.publicExams(
+      schoolId ?? process.env.DEFAULT_SCHOOL_ID ?? '',
     );
   }
 }
