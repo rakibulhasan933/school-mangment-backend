@@ -7,7 +7,12 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
-import type { Response } from 'express';
+type PdfResponse = {
+  status(code: number): PdfResponse;
+  json(body: unknown): PdfResponse;
+  set(headers: Record<string, string>): PdfResponse;
+  send(body: Uint8Array): PdfResponse;
+};
 import { and, eq } from 'drizzle-orm';
 import { createDb } from '../db/index.js';
 import { payments, receipts, salaryRecords, schools } from '../db/schema.js';
@@ -26,7 +31,7 @@ export class ReceiptPdfController {
   @Get(':receiptNumber/pdf') async receipt(
     @Param('receiptNumber') number: string,
     @Query('verifyCode') code: string,
-    @Res() response: Response,
+    @Res() response: PdfResponse,
   ) {
     const [row] = await this.db
       .select({ receipt: receipts, payment: payments, school: schools })
@@ -64,7 +69,7 @@ export class SalaryPdfController {
   async salary(
     @Req() request: AuthenticatedRequest,
     @Param('id') id: string,
-    @Res() response: Response,
+    @Res() response: PdfResponse,
   ) {
     const [row] = await this.db
       .select({ salary: salaryRecords, school: schools })
