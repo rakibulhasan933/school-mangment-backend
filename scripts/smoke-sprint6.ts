@@ -14,7 +14,7 @@ type Envelope = {
   remaining?: number;
   paidAmount?: number;
 };
-const api = process.env.SMOKE_API_URL ?? 'http://localhost:4000/api/v1';
+const api = process.env.SMOKE_API_URL ?? 'http://localhost:3000/api/v1';
 const credentials = JSON.parse(
   readFileSync(resolve(process.cwd(), '.demo-credentials.json'), 'utf8'),
 ) as Credentials;

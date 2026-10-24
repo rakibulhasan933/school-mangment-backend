@@ -8,7 +8,9 @@ type Credentials = {
   teacher: { identifier: string; password: string };
   students: string[];
 };
-const api = process.env.SMOKE_API_URL ?? 'http://localhost:4000/api/v1';
+const api = (
+  process.env.SMOKE_API_URL ?? 'http://localhost:3000/api/v1'
+).replace(/\/+$/, '');
 const schoolId =
   process.env.DEFAULT_SCHOOL_ID ?? process.env.SMOKE_SCHOOL_ID ?? '';
 const credentials = JSON.parse(
@@ -16,7 +18,17 @@ const credentials = JSON.parse(
 ) as Credentials;
 
 async function request(path: string, init: RequestInit = {}) {
-  const response = await fetch(`${api}${path}`, init);
+  const url = `${api}${path}`;
+  let response: Response;
+  try {
+    response = await fetch(url, init);
+  } catch (error: unknown) {
+    const reason = error instanceof Error ? error.message : 'network error';
+    throw new Error(
+      `${path}: cannot reach ${api} (${reason}). Start the backend with ` +
+        '`pnpm start:dev` or set SMOKE_API_URL to the live /api/v1 URL.',
+    );
+  }
   const payload = (await response.json().catch(() => null)) as {
     data?: unknown;
     error?: string;
