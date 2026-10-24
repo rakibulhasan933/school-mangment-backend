@@ -111,7 +111,7 @@ describe('ContentService nullable banner/gallery images (Round 7, Fix 1)', () =>
     const listed = await service.list('banners', 'school-1');
     expect(listed.data).toHaveLength(1);
     expect(listed.data[0]).toHaveProperty('imageUrl', null);
-    expect(listed.data[0].imageUrl).toBeNull();
+    expect((listed.data[0] as { imageUrl?: unknown }).imageUrl).toBeNull();
   });
 
   it('creating a banner with an empty or explicit-null imageUrl also stores null, a real URL is kept', async () => {
@@ -120,17 +120,17 @@ describe('ContentService nullable banner/gallery images (Round 7, Fix 1)', () =>
       titleBn: 'খালি ছবি',
       imageUrl: '',
     });
-    expect(empty.data.imageUrl).toBeNull();
+    expect((empty.data as { imageUrl?: unknown }).imageUrl).toBeNull();
     const explicitNull = await service.create('banners', admin, {
       titleBn: 'ছবি নেই',
       imageUrl: null,
     });
-    expect(explicitNull.data.imageUrl).toBeNull();
+    expect((explicitNull.data as { imageUrl?: unknown }).imageUrl).toBeNull();
     const withImage = await service.create('banners', admin, {
       titleBn: 'ছবিসহ',
       imageUrl: 'https://utfs.io/f/banner.jpg',
     });
-    expect(withImage.data.imageUrl).toBe('https://utfs.io/f/banner.jpg');
+    expect((withImage.data as { imageUrl?: unknown }).imageUrl).toBe('https://utfs.io/f/banner.jpg');
     expect(fake.inserted.map((row) => row.values.imageUrl)).toEqual([
       null,
       null,
@@ -171,7 +171,7 @@ describe('ContentService nullable banner/gallery images (Round 7, Fix 1)', () =>
     const listed = await service.children('galleryItems', 'g-1', 'school-1');
     expect(listed.data).toHaveLength(1);
     expect(listed.data[0]).toHaveProperty('imageUrl', null);
-    expect(listed.data[0].imageUrl).toBeNull();
+    expect((listed.data[0] as { imageUrl?: unknown }).imageUrl).toBeNull();
   });
 
   it('creating a gallery item with a real imageUrl keeps it', async () => {
@@ -183,7 +183,7 @@ describe('ContentService nullable banner/gallery images (Round 7, Fix 1)', () =>
       captionBn: 'ছবি',
       imageUrl: 'https://utfs.io/f/photo.jpg',
     });
-    expect(created.data.imageUrl).toBe('https://utfs.io/f/photo.jpg');
+    expect((created.data as { imageUrl?: unknown }).imageUrl).toBe('https://utfs.io/f/photo.jpg');
   });
 });
 
