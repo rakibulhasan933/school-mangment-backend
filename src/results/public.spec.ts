@@ -3,6 +3,7 @@ import {
   examVisibility,
   isExamResultVisible,
   pickMeritorious,
+  denseRankByTotal,
 } from './public.js';
 
 const now = new Date('2026-10-23T00:00:00.000Z');
@@ -75,5 +76,12 @@ describe('pickMeritorious', () => {
       'y',
       'x',
     ]);
+  });
+});
+
+describe('denseRankByTotal', () => {
+  it('assigns dense ranks for tied totals', () => {
+    const rows = [{ totalMarks: 90 }, { totalMarks: 90 }, { totalMarks: 80 }];
+    expect(denseRankByTotal(rows, rows[2])).toBe(2);
   });
 });

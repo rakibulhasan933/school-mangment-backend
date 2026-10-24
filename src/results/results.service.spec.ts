@@ -43,17 +43,68 @@ describe('ResultsService.publicSearch (B1 contract)', () => {
 
   it('known student with a published result -> FOUND with the result', async () => {
     const { service } = setup({
-      students: [{ id: 'st-1', registrationNumber: '26100001' }],
+      students: [
+        {
+          id: 'st-1',
+          registrationNumber: '26100001',
+          nameBn: 'রাহিম',
+          nameEn: 'Rahim',
+          classNameBn: 'ষষ্ঠ',
+          sectionNameBn: 'ক',
+          roll: 3,
+        },
+      ],
       results: [
         {
-          result: { id: 'r-1', gpa: '5.00', letter: 'A+' },
+          result: {
+            id: 'r-1',
+            examId: 'e-1',
+            classId: 'class-6',
+            studentId: 'st-1',
+            totalMarks: 160,
+            gpa: '5.00',
+            letter: 'A+',
+          },
           exam: { id: 'e-1', nameBn: 'অর্ধ-বার্ষিক' },
+        },
+        {
+          result: { id: 'r-2', examId: 'e-1', classId: 'class-6', totalMarks: 140 },
+          exam: { id: 'e-1', nameBn: 'অর্ধ-বার্ষিক' },
+        },
+      ],
+      result_subjects: [
+        {
+          subjectNameBn: 'বাংলা',
+          fullMarks: 100,
+          obtainedMarks: 80,
+          grade: 'A+',
+          gradePoint: '5.00',
         },
       ],
     });
     const response = await service.publicSearch('school-1', '26100001');
     expect(response.status).toBe('FOUND');
-    expect(response.data).toMatchObject({ result: { gpa: '5.00' } });
+    expect(response.data).toMatchObject({
+      result: { gpa: '5.00', meritPosition: 1 },
+      student: {
+        nameBn: 'রাহিম',
+        nameEn: 'Rahim',
+        registrationNumber: '26100001',
+        classNameBn: 'ষষ্ঠ',
+        sectionNameBn: 'ক',
+        roll: 3,
+      },
+      subjects: [
+        {
+          subjectNameBn: 'বাংলা',
+          fullMarks: 100,
+          obtainedMarks: 80,
+          grade: 'A+',
+          gradePoint: '5.00',
+          subjectNameEn: null,
+        },
+      ],
+    });
   });
 });
 

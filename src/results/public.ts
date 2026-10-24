@@ -54,3 +54,15 @@ export function pickMeritorious<T extends MeritoriousCandidate>(
     })
     .slice(0, limit);
 }
+
+/** Dense rank by total marks: 1, 1, 2 for tied totals. */
+export function denseRankByTotal<T extends { totalMarks: number }>(
+  rows: T[],
+  target: T,
+): number {
+  const totals = [...new Set(rows.map((row) => row.totalMarks))].sort(
+    (a, b) => b - a,
+  );
+  const rank = totals.indexOf(target.totalMarks);
+  return rank < 0 ? 0 : rank + 1;
+}

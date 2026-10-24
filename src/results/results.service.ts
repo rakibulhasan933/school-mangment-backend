@@ -24,6 +24,7 @@ import {
   marks,
   resultSubjects,
   results,
+  sections,
   students,
   subjects,
   users,
@@ -34,7 +35,7 @@ import {
   validateScale,
   type GradeScale,
 } from './processing.js';
-import { examVisibility } from './public.js';
+import { denseRankByTotal, examVisibility } from './public.js';
 import { resolveOwnStudent } from '../people/own-student.js';
 import { examScheduleError } from './exam-dates.js';
 
@@ -629,7 +630,24 @@ export class ResultsService {
       .innerJoin(users, eq(students.userId, users.id))
       .where(and(...conditions))
       .orderBy(asc(results.meritPosition), desc(results.totalMarks));
-    return { data: rows, examId: targetExamId };
+    const totalsByClass = new Map<string, number[]>();
+    for (const row of rows) {
+      const current = totalsByClass.get(row.classId ?? '') ?? [];
+      current.push(row.totalMarks);
+      totalsByClass.set(row.classId ?? '', current);
+    }
+    return {
+      data: rows.map((row) => ({
+        ...row,
+        meritPosition: denseRankByTotal(
+          (totalsByClass.get(row.classId ?? '') ?? []).map((totalMarks) => ({
+            totalMarks,
+          })),
+          { totalMarks: row.totalMarks },
+        ),
+      })),
+      examId: targetExamId,
+    };
   }
 
   async publicSearch(
@@ -638,9 +656,20 @@ export class ResultsService {
     examId?: string,
   ) {
     const student = await this.db
-      .select({ id: students.id, registrationNumber: users.registrationNumber })
+      .select({
+        id: students.id,
+        registrationNumber: users.registrationNumber,
+        nameBn: users.displayNameBn,
+        nameEn: students.nameEn,
+        classId: students.classId,
+        classNameBn: academicClasses.nameBn,
+        sectionNameBn: sections.nameBn,
+        roll: students.roll,
+      })
       .from(students)
       .innerJoin(users, eq(students.userId, users.id))
+      .leftJoin(academicClasses, eq(students.classId, academicClasses.id))
+      .leftJoin(sections, eq(students.sectionId, sections.id))
       .where(
         and(
           eq(students.schoolId, schoolId),
@@ -665,7 +694,60 @@ export class ResultsService {
       .innerJoin(exams, eq(results.examId, exams.id))
       .where(and(...conditions));
     if (!rows[0]) return { data: null, status: 'NO_PUBLISHED_RESULT' };
-    return { data: rows[0], status: 'FOUND' };
+
+    const resultRow = rows[0];
+    const classResults = await this.db
+      .select({ result: results })
+      .from(results)
+      .innerJoin(exams, eq(results.examId, exams.id))
+      .where(
+        and(
+          eq(results.schoolId, schoolId),
+          eq(results.examId, resultRow.result.examId),
+          eq(results.classId, resultRow.result.classId),
+          eq(exams.isPublished, true),
+          or(isNull(exams.publishAt), lte(exams.publishAt, new Date())),
+        ),
+      );
+    const meritPosition = denseRankByTotal(
+      classResults.map((row) => ({ totalMarks: row.result.totalMarks })),
+      { totalMarks: resultRow.result.totalMarks },
+    );
+    const subjectRows = await this.db
+      .select({
+        subjectNameBn: subjects.nameBn,
+        fullMarks: examSubjects.fullMarks,
+        obtainedMarks: resultSubjects.totalMarks,
+        grade: resultSubjects.letter,
+        gradePoint: resultSubjects.gpa,
+      })
+      .from(resultSubjects)
+      .innerJoin(
+        examSubjects,
+        eq(resultSubjects.examSubjectId, examSubjects.id),
+      )
+      .innerJoin(subjects, eq(examSubjects.subjectId, subjects.id))
+      .where(eq(resultSubjects.resultId, resultRow.result.id));
+
+    return {
+      data: {
+        result: { ...resultRow.result, meritPosition },
+        exam: resultRow.exam,
+        student: {
+          nameBn: student[0].nameBn,
+          nameEn: student[0].nameEn,
+          registrationNumber: student[0].registrationNumber,
+          classNameBn: student[0].classNameBn,
+          sectionNameBn: student[0].sectionNameBn,
+          roll: student[0].roll,
+        },
+        subjects: subjectRows.map((subject) => ({
+          ...subject,
+          subjectNameEn: null,
+        })),
+      },
+      status: 'FOUND',
+    };
   }
   async student(user: AuthUser, examId?: string) {
     // B1: resolve via the student row and query with ITS school.
