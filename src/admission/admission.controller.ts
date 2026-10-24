@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -33,6 +34,12 @@ export class AdmissionController {
   }
   @Get() list(@Req() req: AuthenticatedRequest) {
     return this.admission.list(req.user.schoolId);
+  }
+  @Delete(':id') remove(
+    @Req() req: AuthenticatedRequest,
+    @Param('id') id: string,
+  ) {
+    return this.admission.remove(req.user, id);
   }
   @Patch(':id/review') review(
     @Req() req: AuthenticatedRequest,

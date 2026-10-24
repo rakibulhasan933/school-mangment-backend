@@ -4,7 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
-import { and, asc, desc, eq, gte, lte } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, lte } from 'drizzle-orm';
 import { createDb } from '../db/index.js';
 import {
   academicClasses,
@@ -23,10 +23,15 @@ import {
 import type { AuthUser } from '../auth/auth.types.js';
 import {
   applyPayment,
+  deriveFeeStatus,
   generateDues,
   ledgerTotals,
   nextReceiptNumber,
 } from './money.js';
+import {
+  resolveOwnStudent,
+  resolveOwnTeacher,
+} from '../people/own-student.js';
 
 @Injectable()
 export class FinanceService {
@@ -53,6 +58,8 @@ export class FinanceService {
       .select({
         feeEventId: studentFees.feeEventId,
         status: studentFees.status,
+        amount: studentFees.amount,
+        paidAmount: studentFees.paidAmount,
       })
       .from(studentFees)
       .where(eq(studentFees.schoolId, schoolId));
@@ -69,8 +76,14 @@ export class FinanceService {
               amount: row.amount,
             })),
           duesCount: own.length,
-          paidCount: own.filter((row) => row.status === 'PAID').length,
-          partialCount: own.filter((row) => row.status === 'PARTIAL').length,
+          // B6: counts derive from amounts, never the stored status.
+          paidCount: own.filter(
+            (row) => deriveFeeStatus(row.amount, row.paidAmount) === 'PAID',
+          ).length,
+          partialCount: own.filter(
+            (row) =>
+              deriveFeeStatus(row.amount, row.paidAmount) === 'PARTIAL',
+          ).length,
         };
       }),
     };
@@ -107,6 +120,8 @@ export class FinanceService {
         )
         .map((row) => ({
           ...row.fee,
+          // B6: the status the UI shows is always derived from amounts.
+          status: deriveFeeStatus(row.fee.amount, row.fee.paidAmount),
           studentNameBn: row.studentNameBn,
           registrationNumber: row.registrationNumber,
           classNameBn: row.classNameBn,
@@ -292,6 +307,58 @@ export class FinanceService {
       classes: charges,
     });
   }
+  /**
+   * B4: delete a fee event. Refused (400) as soon as any payment exists
+   * against the event's dues — paid money must never lose its event.
+   * Otherwise the event, its per-class charges and its (unpaid) student
+   * assignments are removed together in one transaction.
+   */
+  async removeEvent(user: AuthUser, eventId: string) {
+    const [event] = await this.db
+      .select()
+      .from(feeEvents)
+      .where(
+        and(eq(feeEvents.id, eventId), eq(feeEvents.schoolId, user.schoolId)),
+      )
+      .limit(1);
+    if (!event) throw new NotFoundException('ফি ইভেন্ট পাওয়া যায়নি');
+    const fees = await this.db
+      .select({ id: studentFees.id })
+      .from(studentFees)
+      .where(eq(studentFees.feeEventId, eventId));
+    if (fees.length) {
+      const paymentRows = await this.db
+        .select({ id: payments.id })
+        .from(payments)
+        .where(
+          inArray(
+            payments.studentFeeId,
+            fees.map((row) => row.id),
+          ),
+        );
+      if (paymentRows.length)
+        throw new BadRequestException(
+          'এই ফি ইভেন্টে পেমেন্ট জমা হয়েছে, তাই এটি মোছা যাবে না',
+        );
+    }
+    await this.db.transaction(async (tx) => {
+      await tx
+        .delete(studentFees)
+        .where(eq(studentFees.feeEventId, eventId));
+      await tx
+        .delete(feeEventClasses)
+        .where(eq(feeEventClasses.feeEventId, eventId));
+      await tx
+        .delete(feeEvents)
+        .where(
+          and(
+            eq(feeEvents.id, eventId),
+            eq(feeEvents.schoolId, user.schoolId),
+          ),
+        );
+    });
+    return { data: { id: eventId, removedAssignments: fees.length } };
+  }
   async pay(
     user: AuthUser,
     feeId: string,
@@ -340,7 +407,7 @@ export class FinanceService {
       .update(studentFees)
       .set({
         paidAmount,
-        status: paidAmount === due.amount ? 'PAID' : 'PARTIAL',
+        status: deriveFeeStatus(due.amount, paidAmount),
         updatedAt: new Date(),
       })
       .where(eq(studentFees.id, due.id));
@@ -416,14 +483,12 @@ export class FinanceService {
     };
   }
   async studentDues(user: AuthUser) {
-    const [student] = await this.db
-      .select({ id: students.id })
-      .from(students)
-      .where(
-        and(eq(students.schoolId, user.schoolId), eq(students.userId, user.id)),
-      )
-      .limit(1);
-    if (!student) return { data: [] };
+    // B1: resolve the student row by account id and use ITS school —
+    // the token's schoolId can point at a school with no student record.
+    const own = await resolveOwnStudent(this.db, user);
+    if (!own) return { data: [] };
+    const student = own.student;
+    const schoolId = own.schoolId;
     // Join the fee event so the student portal can show the event name
     // instead of a bare fee row; remainingAmount is derived, never stored.
     const rows = await this.db
@@ -437,7 +502,7 @@ export class FinanceService {
       .innerJoin(feeEvents, eq(feeEvents.id, studentFees.feeEventId))
       .where(
         and(
-          eq(studentFees.schoolId, user.schoolId),
+          eq(studentFees.schoolId, schoolId),
           eq(studentFees.studentId, student.id),
         ),
       )
@@ -445,6 +510,8 @@ export class FinanceService {
     return {
       data: rows.map((row) => ({
         ...row.fee,
+        // B6: derived status, never the stored column.
+        status: deriveFeeStatus(row.fee.amount, row.fee.paidAmount),
         eventNameBn: row.eventNameBn,
         eventType: row.eventType,
         eventDescription: row.eventDescription,
@@ -453,14 +520,10 @@ export class FinanceService {
     };
   }
   async studentPayments(user: AuthUser) {
-    const [student] = await this.db
-      .select({ id: students.id })
-      .from(students)
-      .where(
-        and(eq(students.schoolId, user.schoolId), eq(students.userId, user.id)),
-      )
-      .limit(1);
-    if (!student) return { data: [] };
+    const own = await resolveOwnStudent(this.db, user);
+    if (!own) return { data: [] };
+    const student = own.student;
+    const schoolId = own.schoolId;
     // Join the receipt + fee event so the portal can render a real receipt
     // (receipt number / verify code / event name), newest payment first.
     const rows = await this.db
@@ -476,7 +539,7 @@ export class FinanceService {
       .innerJoin(feeEvents, eq(feeEvents.id, studentFees.feeEventId))
       .where(
         and(
-          eq(payments.schoolId, user.schoolId),
+          eq(payments.schoolId, schoolId),
           eq(payments.studentId, student.id),
         ),
       )
@@ -490,20 +553,95 @@ export class FinanceService {
       })),
     };
   }
-  async teacherSalaries(user: AuthUser) {
-    const [teacher] = await this.db
-      .select({ id: teachers.id })
-      .from(teachers)
+  async studentStatement(user: AuthUser, studentId: string) {
+    // ADMIN per-student fee statement (student-profile "ফি ও পেমেন্ট"
+    // tab). The student row must belong to the caller's own school —
+    // the :studentId param is never trusted on its own.
+    const [student] = await this.db
+      .select({ id: students.id })
+      .from(students)
       .where(
-        and(eq(teachers.schoolId, user.schoolId), eq(teachers.userId, user.id)),
+        and(eq(students.id, studentId), eq(students.schoolId, user.schoolId)),
       )
       .limit(1);
+    if (!student) throw new NotFoundException('শিক্ষার্থী পাওয়া যায়নি');
+    const schoolId = user.schoolId;
+    const feeRows = await this.db
+      .select({
+        fee: studentFees,
+        eventNameBn: feeEvents.nameBn,
+        eventType: feeEvents.type,
+      })
+      .from(studentFees)
+      .innerJoin(feeEvents, eq(feeEvents.id, studentFees.feeEventId))
+      .where(
+        and(
+          eq(studentFees.schoolId, schoolId),
+          eq(studentFees.studentId, studentId),
+        ),
+      )
+      .orderBy(asc(studentFees.dueDate));
+    const paymentRows = await this.db
+      .select({
+        payment: payments,
+        receiptNumber: receipts.receiptNumber,
+        verifyCode: receipts.verifyCode,
+        eventNameBn: feeEvents.nameBn,
+        // Round 9: the receipt print needs the collector's display name,
+        // not just the collectedBy user id stored on the payment row.
+        collectedByName: users.displayNameBn,
+      })
+      .from(payments)
+      .innerJoin(receipts, eq(receipts.id, payments.receiptId))
+      .innerJoin(studentFees, eq(studentFees.id, payments.studentFeeId))
+      .innerJoin(feeEvents, eq(feeEvents.id, studentFees.feeEventId))
+      .leftJoin(users, eq(users.id, payments.collectedBy))
+      .where(
+        and(eq(payments.schoolId, schoolId), eq(payments.studentId, studentId)),
+      )
+      .orderBy(desc(payments.paidAt));
+    const assignments = feeRows.map((row) => ({
+      ...row.fee,
+      // B6: derived status, never the stored column.
+      status: deriveFeeStatus(row.fee.amount, row.fee.paidAmount),
+      eventNameBn: row.eventNameBn,
+      eventType: row.eventType,
+      remainingAmount: row.fee.amount - row.fee.paidAmount,
+    }));
+    // Totals come from the assignments themselves so the summary cards
+    // always reconcile with the table beneath them.
+    const totalAmount = assignments.reduce((sum, row) => sum + row.amount, 0);
+    const totalPaid = assignments.reduce(
+      (sum, row) => sum + row.paidAmount,
+      0,
+    );
     return {
-      data: teacher
+      data: {
+        totals: { totalAmount, totalPaid, totalDue: totalAmount - totalPaid },
+        assignments,
+        payments: paymentRows.map((row) => ({
+          ...row.payment,
+          receiptNumber: row.receiptNumber,
+          verifyCode: row.verifyCode,
+          eventNameBn: row.eventNameBn,
+          collectedByName: row.collectedByName ?? null,
+        })),
+      },
+    };
+  }
+  async teacherSalaries(user: AuthUser) {
+    const own = await resolveOwnTeacher(this.db, user);
+    return {
+      data: own
         ? await this.db
             .select()
             .from(salaryRecords)
-            .where(eq(salaryRecords.teacherId, teacher.id))
+            .where(
+              and(
+                eq(salaryRecords.schoolId, own.schoolId),
+                eq(salaryRecords.teacherId, own.teacher.id),
+              ),
+            )
             .orderBy(asc(salaryRecords.salaryMonth))
         : [],
     };
@@ -535,34 +673,149 @@ export class FinanceService {
         'এই শিক্ষকের ওই মাসের বেতন ইতিমধ্যে পরিশোধ করা হয়েছে',
       );
     const net = value.basic + (value.allowances ?? 0) - (value.deductions ?? 0);
-    const [row] = await this.db
-      .insert(salaryRecords)
-      .values({
-        schoolId: user.schoolId,
-        teacherId: value.teacherId,
-        salaryMonth: value.salaryMonth,
-        basic: value.basic,
-        allowances: value.allowances ?? 0,
-        deductions: value.deductions ?? 0,
-        net,
-        status: 'PAID',
-        paidAt: new Date().toISOString().slice(0, 10),
-        method: value.method,
-      })
-      .returning();
-    if (!row) throw new Error('বেতন সংরক্ষণ করা যায়নি');
-    await this.db
-      .insert(ledgerEntries)
-      .values({
+    // B5: the salary record and its আয়–ব্যয় ledger expense are written
+    // in ONE transaction — a salary payment must never exist without its
+    // ledger entry (the live ledger was missing real salary payments
+    // because the two writes were not atomic / not always paired).
+    const row = await this.db.transaction(async (tx) => {
+      const [saved] = await tx
+        .insert(salaryRecords)
+        .values({
+          schoolId: user.schoolId,
+          teacherId: value.teacherId,
+          salaryMonth: value.salaryMonth,
+          basic: value.basic,
+          allowances: value.allowances ?? 0,
+          deductions: value.deductions ?? 0,
+          net,
+          status: 'PAID',
+          paidAt: new Date().toISOString().slice(0, 10),
+          method: value.method,
+        })
+        .returning();
+      if (!saved) throw new Error('বেতন সংরক্ষণ করা যায়নি');
+      await tx.insert(ledgerEntries).values({
         schoolId: user.schoolId,
         type: 'EXPENSE',
         amount: net,
-        entryDate: row.paidAt!,
+        entryDate: saved.paidAt!,
         description: `বেতন ${value.salaryMonth}`,
         sourceType: 'SALARY',
-        sourceId: row.id,
+        sourceId: saved.id,
         createdBy: user.id,
       });
+      return saved;
+    });
     return { data: row };
+  }
+  /** B5/B12: deleting a salary record also removes its ledger expense. */
+  async removeSalary(user: AuthUser, id: string) {
+    const [row] = await this.db
+      .select()
+      .from(salaryRecords)
+      .where(
+        and(
+          eq(salaryRecords.id, id),
+          eq(salaryRecords.schoolId, user.schoolId),
+        ),
+      )
+      .limit(1);
+    if (!row) throw new NotFoundException('বেতনের রেকর্ড পাওয়া যায়নি');
+    await this.db.transaction(async (tx) => {
+      await tx
+        .delete(ledgerEntries)
+        .where(
+          and(
+            eq(ledgerEntries.schoolId, user.schoolId),
+            eq(ledgerEntries.sourceType, 'SALARY'),
+            eq(ledgerEntries.sourceId, id),
+          ),
+        );
+      await tx
+        .delete(salaryRecords)
+        .where(
+          and(
+            eq(salaryRecords.id, id),
+            eq(salaryRecords.schoolId, user.schoolId),
+          ),
+        );
+    });
+    return { data: { id } };
+  }
+  /**
+   * B12: delete one fee payment and roll everything it touched back in a
+   * single transaction — the due's paidAmount/status is recomputed, the
+   * receipt is removed, and the auto-posted ledger income is removed.
+   */
+  async removePayment(user: AuthUser, paymentId: string) {
+    const [payment] = await this.db
+      .select()
+      .from(payments)
+      .where(
+        and(eq(payments.id, paymentId), eq(payments.schoolId, user.schoolId)),
+      )
+      .limit(1);
+    if (!payment) throw new NotFoundException('পেমেন্ট পাওয়া যায়নি');
+    const [due] = await this.db
+      .select()
+      .from(studentFees)
+      .where(eq(studentFees.id, payment.studentFeeId))
+      .limit(1);
+    await this.db.transaction(async (tx) => {
+      await tx.delete(payments).where(eq(payments.id, paymentId));
+      await tx
+        .delete(ledgerEntries)
+        .where(
+          and(
+            eq(ledgerEntries.schoolId, user.schoolId),
+            eq(ledgerEntries.sourceType, 'PAYMENT'),
+            eq(ledgerEntries.sourceId, payment.receiptId),
+          ),
+        );
+      await tx.delete(receipts).where(eq(receipts.id, payment.receiptId));
+      if (due) {
+        const paidAmount = Math.max(due.paidAmount - payment.amount, 0);
+        await tx
+          .update(studentFees)
+          .set({
+            paidAmount,
+            status: deriveFeeStatus(due.amount, paidAmount),
+            updatedAt: new Date(),
+          })
+          .where(eq(studentFees.id, due.id));
+      }
+    });
+    return { data: { id: paymentId } };
+  }
+  /**
+   * B12: manual ledger entries can be deleted; system-generated entries
+   * (fee payments, salary) are refused — delete them from their source
+   * screen so the books stay consistent.
+   */
+  async removeLedgerEntry(user: AuthUser, id: string) {
+    const [entry] = await this.db
+      .select()
+      .from(ledgerEntries)
+      .where(
+        and(
+          eq(ledgerEntries.id, id),
+          eq(ledgerEntries.schoolId, user.schoolId),
+        ),
+      )
+      .limit(1);
+    if (!entry) throw new NotFoundException('লেজার এন্ট্রি পাওয়া যায়নি');
+    if (entry.sourceType === 'PAYMENT' || entry.sourceType === 'SALARY')
+      throw new BadRequestException(
+        'স্বয়ংক্রিয় লেজার এন্ট্রি এখান থেকে মোছা যাবে না — সংশ্লিষ্ট পেমেন্ট/বেতন রেকর্ড মুছুন',
+      );
+    await this.db
+      .delete(ledgerEntries)
+      .where(
+        and(
+          eq(ledgerEntries.id, id),
+          eq(ledgerEntries.schoolId, user.schoolId),
+        ),
+      );
+    return { data: { id } };
   }
 }

@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -34,6 +35,8 @@ import {
   type GradeScale,
 } from './processing.js';
 import { examVisibility } from './public.js';
+import { resolveOwnStudent } from '../people/own-student.js';
+import { examScheduleError } from './exam-dates.js';
 
 @Injectable()
 export class ResultsService {
@@ -216,6 +219,21 @@ export class ResultsService {
     examId: string,
     value: { publishAt?: string; countdownEnabled?: boolean },
   ) {
+    // B10: a publish date before the exam ends is rejected here too —
+    // this is the exact flow that produced the live Nov-20/Dec-15 clash.
+    if (value.publishAt) {
+      const [exam] = await this.db
+        .select({ endsAt: exams.endsAt })
+        .from(exams)
+        .where(and(eq(exams.id, examId), eq(exams.schoolId, user.schoolId)))
+        .limit(1);
+      if (!exam) throw new NotFoundException('পরীক্ষা পাওয়া যায়নি');
+      const error = examScheduleError({
+        endsAt: exam.endsAt,
+        publishAt: value.publishAt,
+      });
+      if (error) throw new BadRequestException(error);
+    }
     const [row] = await this.db
       .update(exams)
       .set({
@@ -236,11 +254,104 @@ export class ResultsService {
     return { data: row };
   }
   async createExam(user: AuthUser, value: Record<string, unknown>) {
+    const error = examScheduleError({
+      endsAt: value.endsAt as string | undefined,
+      publishAt: value.publishAt as string | undefined,
+    });
+    if (error) throw new BadRequestException(error);
     const [row] = await this.db
       .insert(exams)
       .values({ ...value, schoolId: user.schoolId } as never)
       .returning();
     return { data: row };
+  }
+  /** B10/B12: exam update (dates included) with the same sanity rule. */
+  async updateExam(
+    user: AuthUser,
+    id: string,
+    value: Record<string, unknown>,
+  ) {
+    const [existing] = await this.db
+      .select()
+      .from(exams)
+      .where(and(eq(exams.id, id), eq(exams.schoolId, user.schoolId)))
+      .limit(1);
+    if (!existing) throw new NotFoundException('পরীক্ষা পাওয়া যায়নি');
+    const { schoolId: _ignored, id: _ignoredId, ...fields } = value;
+    const merged = { ...existing, ...fields } as {
+      endsAt?: string | null;
+      publishAt?: string | Date | null;
+    };
+    const error = examScheduleError({
+      endsAt: merged.endsAt,
+      publishAt: merged.publishAt,
+    });
+    if (error) throw new BadRequestException(error);
+    const [row] = await this.db
+      .update(exams)
+      .set({ ...fields, updatedAt: new Date() } as never)
+      .where(and(eq(exams.id, id), eq(exams.schoolId, user.schoolId)))
+      .returning();
+    return { data: row };
+  }
+  /** B12: delete an exam — refused while it has marks or results. */
+  async removeExam(user: AuthUser, id: string) {
+    const [exam] = await this.db
+      .select()
+      .from(exams)
+      .where(and(eq(exams.id, id), eq(exams.schoolId, user.schoolId)))
+      .limit(1);
+    if (!exam) throw new NotFoundException('পরীক্ষা পাওয়া যায়নি');
+    const [resultRow] = await this.db
+      .select({ id: results.id })
+      .from(results)
+      .where(eq(results.examId, id))
+      .limit(1);
+    const configs = await this.db
+      .select({ id: examSubjects.id })
+      .from(examSubjects)
+      .where(eq(examSubjects.examId, id));
+    if (resultRow)
+      throw new BadRequestException(
+        'এই পরীক্ষার ফলাফল তৈরি হয়েছে, তাই মোছা যাবে না',
+      );
+    if (configs.length) {
+      const markRows = await this.db
+        .select({ id: marks.id })
+        .from(marks)
+        .where(
+          inArray(
+            marks.examSubjectId,
+            configs.map((row) => row.id),
+          ),
+        )
+        .limit(1);
+      if (markRows.length)
+        throw new BadRequestException(
+          'এই পরীক্ষায় নম্বর এন্ট্রি হয়েছে, তাই মোছা যাবে না',
+        );
+    }
+    await this.db.transaction(async (tx) => {
+      await tx.delete(examSubjects).where(eq(examSubjects.examId, id));
+      await tx
+        .delete(exams)
+        .where(and(eq(exams.id, id), eq(exams.schoolId, user.schoolId)));
+    });
+    return { data: { id } };
+  }
+  /** B12: delete one grading-scale row of the caller's school. */
+  async removeScale(user: AuthUser, id: string) {
+    const [row] = await this.db
+      .delete(gradingScales)
+      .where(
+        and(
+          eq(gradingScales.id, id),
+          eq(gradingScales.schoolId, user.schoolId),
+        ),
+      )
+      .returning();
+    if (!row) throw new NotFoundException('গ্রেডিং স্কেল পাওয়া যায়নি');
+    return { data: { id } };
   }
   async saveMark(
     user: AuthUser,
@@ -537,7 +648,10 @@ export class ResultsService {
         ),
       )
       .limit(1);
-    if (!student[0]) return { data: null };
+    // B1 contract: distinguish "no such student" from "student exists
+    // but has no published result yet" — the portal used to show the
+    // same "কোনো ফলাফল পাওয়া যায়নি" for both.
+    if (!student[0]) return { data: null, status: 'STUDENT_NOT_FOUND' };
     const conditions = [
       eq(results.schoolId, schoolId),
       eq(results.studentId, student[0].id),
@@ -550,23 +664,77 @@ export class ResultsService {
       .from(results)
       .innerJoin(exams, eq(results.examId, exams.id))
       .where(and(...conditions));
-    return { data: rows[0] ?? null };
+    if (!rows[0]) return { data: null, status: 'NO_PUBLISHED_RESULT' };
+    return { data: rows[0], status: 'FOUND' };
   }
   async student(user: AuthUser, examId?: string) {
+    // B1: resolve via the student row and query with ITS school.
+    const own = await resolveOwnStudent(this.db, user);
+    if (!own) return { data: [] };
+    const data = await this.resultsForStudent(
+      own.schoolId,
+      own.student.id,
+      true,
+      examId,
+    );
+    return { data };
+  }
+
+  /**
+   * ADMIN per-student results for the student-profile "ফলাফল" tab
+   * (Round 9). Mirrors the student-portal read but takes an explicit
+   * studentId — accepted only after the same school-ownership check the
+   * Round-8 fee statement uses — and skips the publish gate, because the
+   * admin processes results before publishing them (the exam row carries
+   * isPublished/publishAt so the UI can badge unpublished results).
+   */
+  async studentResults(user: AuthUser, studentId: string) {
+    const [student] = await this.db
+      .select({ id: students.id })
+      .from(students)
+      .where(
+        and(eq(students.id, studentId), eq(students.schoolId, user.schoolId)),
+      )
+      .limit(1);
+    if (!student) throw new NotFoundException('শিক্ষার্থী পাওয়া যায়নি');
+    const data = await this.resultsForStudent(user.schoolId, studentId, false);
+    return { data };
+  }
+
+  /**
+   * Shared assembler: every processed result of one student, each with
+   * its subject-wise marksheet rows (configured maxima from exam_subjects,
+   * obtained CQ/MCQ/Practical from marks). `publishedOnly` applies the
+   * public-visibility gate used by the student portal.
+   */
+  private async resultsForStudent(
+    schoolId: string,
+    studentId: string,
+    publishedOnly: boolean,
+    examId?: string,
+  ) {
+    const conditions = [
+      eq(results.schoolId, schoolId),
+      eq(results.studentId, studentId),
+      ...(publishedOnly
+        ? [
+            eq(exams.isPublished, true),
+            or(isNull(exams.publishAt), lte(exams.publishAt, new Date())),
+          ]
+        : []),
+      ...(examId ? [eq(results.examId, examId)] : []),
+    ];
     const rows = await this.db
-      .select({ result: results, exam: exams })
+      .select({
+        result: results,
+        exam: exams,
+        sessionName: academicSessions.name,
+      })
       .from(results)
       .innerJoin(exams, eq(results.examId, exams.id))
       .innerJoin(students, eq(results.studentId, students.id))
-      .where(
-        and(
-          eq(results.schoolId, user.schoolId),
-          eq(students.userId, user.id),
-          eq(exams.isPublished, true),
-          or(isNull(exams.publishAt), lte(exams.publishAt, new Date())),
-          ...(examId ? [eq(results.examId, examId)] : []),
-        ),
-      );
+      .innerJoin(academicSessions, eq(exams.sessionId, academicSessions.id))
+      .where(and(...conditions));
     const data = await Promise.all(
       rows.map(async (row) => ({
         ...row,
@@ -606,6 +774,6 @@ export class ResultsService {
           .where(eq(resultSubjects.resultId, row.result.id)),
       })),
     );
-    return { data };
+    return data;
   }
 }

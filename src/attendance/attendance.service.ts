@@ -1,4 +1,8 @@
-import { ForbiddenException, Injectable } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { and, asc, eq, gte, inArray, lte } from 'drizzle-orm';
 import { createDb } from '../db/index.js';
 import {
@@ -215,6 +219,69 @@ export class AttendanceService {
         percentage: Math.round((value.present * 10000) / value.total) / 100,
       })),
       threshold,
+    };
+  }
+  /**
+   * ADMIN per-student attendance for the student-profile "হাজিরা" tab
+   * (Round 9). The student row must belong to the caller's school — the
+   * same ownership check as the Round-8 fee statement. Returns the list
+   * of months that have records, the selected month's day-by-day records
+   * and summaries for both the selected month and all records. Status
+   * buckets mirror report(): PRESENT / ABSENT / LEAVE.
+   */
+  async studentAttendance(user: AuthUser, studentId: string, month?: string) {
+    const [student] = await this.db
+      .select({ id: students.id })
+      .from(students)
+      .where(
+        and(eq(students.id, studentId), eq(students.schoolId, user.schoolId)),
+      )
+      .limit(1);
+    if (!student) throw new NotFoundException('শিক্ষার্থী পাওয়া যায়নি');
+    const rows = await this.db
+      .select({
+        date: attendance.attendanceDate,
+        status: attendance.status,
+        note: attendance.note,
+      })
+      .from(attendance)
+      .where(
+        and(
+          eq(attendance.schoolId, user.schoolId),
+          eq(attendance.studentId, studentId),
+        ),
+      )
+      .orderBy(asc(attendance.attendanceDate));
+    const summarize = (list: typeof rows) => {
+      const present = list.filter((row) => row.status === 'PRESENT').length;
+      const absent = list.filter((row) => row.status === 'ABSENT').length;
+      const leave = list.filter((row) => row.status === 'LEAVE').length;
+      return {
+        totalDays: list.length,
+        present,
+        absent,
+        leave,
+        percentage: list.length
+          ? Math.round((present * 10000) / list.length) / 100
+          : 0,
+      };
+    };
+    const months = [...new Set(rows.map((row) => row.date.slice(0, 7)))].sort(
+      (a, b) => (a < b ? 1 : -1),
+    );
+    const selected =
+      month && /^\d{4}-\d{2}$/.test(month)
+        ? month
+        : (months[0] ?? new Date().toISOString().slice(0, 7));
+    const records = rows.filter((row) => row.date.startsWith(selected));
+    return {
+      data: {
+        month: selected,
+        months,
+        summary: summarize(records),
+        overall: summarize(rows),
+        records,
+      },
     };
   }
   async public(

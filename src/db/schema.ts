@@ -178,7 +178,7 @@ export const banners = pgTable('banners', {
   schoolId: uuid('school_id')
     .notNull()
     .references(() => schools.id),
-  imageUrl: text('image_url').notNull(),
+  imageUrl: text('image_url'),
   titleBn: text('title_bn').notNull(),
   captionBn: text('caption_bn'),
   href: text('href'),
@@ -244,7 +244,7 @@ export const galleryItems = pgTable('gallery_items', {
   galleryId: uuid('gallery_id')
     .notNull()
     .references(() => galleries.id),
-  imageUrl: text('image_url').notNull(),
+  imageUrl: text('image_url'),
   captionBn: text('caption_bn'),
   orderIndex: integer('order_index').notNull().default(0),
   ...contentTimestamps,

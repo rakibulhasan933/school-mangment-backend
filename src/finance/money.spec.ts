@@ -1,10 +1,29 @@
 import { describe, expect, it } from 'vitest';
 import {
   applyPayment,
+  deriveFeeStatus,
   generateDues,
   ledgerTotals,
   nextReceiptNumber,
 } from './money.js';
+
+describe('deriveFeeStatus (B6)', () => {
+  it('paid 500 of 600 is PARTIAL, never PAID', () => {
+    expect(deriveFeeStatus(60000, 50000)).toBe('PARTIAL');
+  });
+  it('paid nothing is DUE', () => {
+    expect(deriveFeeStatus(60000, 0)).toBe('DUE');
+  });
+  it('paid in full is PAID', () => {
+    expect(deriveFeeStatus(60000, 60000)).toBe('PAID');
+  });
+  it('overpaid is PAID', () => {
+    expect(deriveFeeStatus(60000, 65000)).toBe('PAID');
+  });
+  it('one paisa short is PARTIAL', () => {
+    expect(deriveFeeStatus(60000, 59999)).toBe('PARTIAL');
+  });
+});
 
 describe('Sprint 5 money rules', () => {
   it('generates dues only for selected classes using each class amount', () => {

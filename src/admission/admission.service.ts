@@ -118,6 +118,32 @@ export class AdmissionService {
       .limit(1);
     return { data: row ?? null };
   }
+  /**
+   * B12: delete an admission application. Refused once the application
+   * has been approved into a real student record — that history must
+   * stay traceable; pending/rejected applications can be removed.
+   */
+  async remove(user: AuthUser, id: string) {
+    const [application] = await this.db
+      .select()
+      .from(admissionApplications)
+      .where(
+        and(
+          eq(admissionApplications.id, id),
+          eq(admissionApplications.schoolId, user.schoolId),
+        ),
+      )
+      .limit(1);
+    if (!application) throw new NotFoundException('আবেদন পাওয়া যায়নি');
+    if (application.studentId)
+      throw new BadRequestException(
+        'অনুমোদিত আবেদন মোছা যাবে না — শিক্ষার্থী রেকর্ড তৈরি হয়ে গেছে',
+      );
+    await this.db
+      .delete(admissionApplications)
+      .where(eq(admissionApplications.id, id));
+    return { data: { id } };
+  }
   async list(schoolId: string) {
     return {
       data: await this.db

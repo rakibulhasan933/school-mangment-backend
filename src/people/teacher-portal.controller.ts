@@ -1,8 +1,9 @@
 import { Controller, Get, Req, UseGuards } from '@nestjs/common';
-import { and, eq, asc } from 'drizzle-orm';
+import { and, eq, asc, desc, gt, isNull, lte, or } from 'drizzle-orm';
 import { createDb } from '../db/index.js';
 import {
   academicClasses,
+  notices,
   routineEntries,
   sections,
   subjectAssignments,
@@ -10,6 +11,7 @@ import {
   teachers,
   users,
 } from '../db/schema.js';
+import { resolveOwnTeacher } from './own-student.js';
 import {
   JwtAuthGuard,
   type AuthenticatedRequest,
@@ -36,6 +38,52 @@ export class TeacherPortalController {
       )
       .limit(1);
     return { data: row ?? null };
+  }
+  /**
+   * B9: the teacher dashboard's "সাম্প্রতিক বিজ্ঞপ্তি" was always empty —
+   * no teacher-facing notices endpoint existed, and the only notices
+   * list (GET /content/notices) is ADMIN-only, so teacher tokens got
+   * 403. This serves published, in-window notices addressed to everyone
+   * or to teachers/staff, from the teacher's OWN school.
+   */
+  @Get('notices') async noticesForTeacher(
+    @Req() request: AuthenticatedRequest,
+  ) {
+    const own = await resolveOwnTeacher(this.db, request.user);
+    if (!own) return { data: [] };
+    const now = new Date();
+    const rows = await this.db
+      .select({
+        id: notices.id,
+        titleBn: notices.titleBn,
+        details: notices.details,
+        category: notices.category,
+        attachmentUrl: notices.attachmentUrl,
+        isPinned: notices.isPinned,
+        publishAt: notices.publishAt,
+        createdAt: notices.createdAt,
+        audience: notices.audience,
+        audienceClass: notices.audienceClass,
+      })
+      .from(notices)
+      .where(
+        and(
+          eq(notices.schoolId, own.schoolId),
+          eq(notices.isPublished, true),
+          or(isNull(notices.publishAt), lte(notices.publishAt, now)),
+          or(isNull(notices.expiresAt), gt(notices.expiresAt, now)),
+        ),
+      )
+      .orderBy(desc(notices.isPinned), desc(notices.createdAt));
+    const data = rows.filter((row) => {
+      const audience = (row.audience ?? 'public').toLowerCase();
+      // Class-targeted student notices are not the teacher's feed;
+      // general / teacher / staff audiences are.
+      if (audience === 'student' || audience === 'students') return false;
+      if (row.audienceClass?.trim()) return false;
+      return true;
+    });
+    return { data };
   }
   @Get('assignments') async assignments(@Req() request: AuthenticatedRequest) {
     const [teacher] = await this.db

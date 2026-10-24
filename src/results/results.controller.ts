@@ -54,6 +54,25 @@ export class ResultsController {
   ) {
     return this.results.createExam(req.user, dto.value);
   }
+  @Patch('exams/:id') @Roles('ADMIN') updateExam(
+    @Req() req: AuthenticatedRequest,
+    @Param('id') id: string,
+    @Body() dto: ContentMutationDto,
+  ) {
+    return this.results.updateExam(req.user, id, dto.value);
+  }
+  @Delete('exams/:id') @Roles('ADMIN') removeExam(
+    @Req() req: AuthenticatedRequest,
+    @Param('id') id: string,
+  ) {
+    return this.results.removeExam(req.user, id);
+  }
+  @Delete('grading-scales/:id') @Roles('ADMIN') removeScale(
+    @Req() req: AuthenticatedRequest,
+    @Param('id') id: string,
+  ) {
+    return this.results.removeScale(req.user, id);
+  }
   @Patch('exams/:id/publish') @Roles('ADMIN') publish(
     @Req() req: AuthenticatedRequest,
     @Param('id') id: string,
@@ -126,6 +145,12 @@ export class ResultsController {
     @Query('examId') examId?: string,
   ) {
     return this.results.student(req.user, examId);
+  }
+  @Get('students/:studentId') @Roles('ADMIN') studentResults(
+    @Req() req: AuthenticatedRequest,
+    @Param('studentId') studentId: string,
+  ) {
+    return this.results.studentResults(req.user, studentId);
   }
 }
 

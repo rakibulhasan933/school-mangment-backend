@@ -10,8 +10,16 @@ import { createDb } from '../db/index.js';
 import {
   academicClasses,
   academicSessions,
+  admissionApplications,
+  attendance,
+  marks,
+  payments,
+  results,
+  routineEntries,
+  salaryRecords,
   sections,
   staff,
+  studentFees,
   students,
   subjectAssignments,
   subjects,
@@ -187,9 +195,33 @@ export class PeopleService {
         motherNameBn: value.motherNameBn
           ? String(value.motherNameBn)
           : undefined,
+        // B2: every field the admin form collects must be persisted —
+        // these were silently dropped here, so profiles showed "—" for
+        // জন্ম তারিখ / লিঙ্গ / ধর্ম / রক্তের গ্রুপ / ঠিকানা despite the
+        // form sending them (the columns have existed since 0000).
+        dateOfBirth: value.dateOfBirth ? String(value.dateOfBirth) : undefined,
+        birthCertificateNumber: value.birthCertificateNumber
+          ? String(value.birthCertificateNumber)
+          : undefined,
+        gender: value.gender ? String(value.gender) : undefined,
+        religion: value.religion ? String(value.religion) : undefined,
+        bloodGroup: value.bloodGroup ? String(value.bloodGroup) : undefined,
         guardianMobile: value.guardianMobile
           ? String(value.guardianMobile)
           : undefined,
+        presentAddress: value.presentAddress
+          ? String(value.presentAddress)
+          : undefined,
+        permanentAddress: value.permanentAddress
+          ? String(value.permanentAddress)
+          : undefined,
+        previousInstitution: value.previousInstitution
+          ? String(value.previousInstitution)
+          : undefined,
+        admissionDate: value.admissionDate
+          ? String(value.admissionDate)
+          : undefined,
+        photoUrl: value.photoUrl ? String(value.photoUrl) : undefined,
       })
       .returning();
     return { data: { ...student, registrationNumber } };
@@ -315,6 +347,120 @@ export class PeopleService {
       };
     }
     return { data: row };
+  }
+  /**
+   * B12: school-scoped deletes for people resources, with referential
+   * guards. Financial/academic history (payments, marks, results,
+   * salary) blocks deletion with a clear 400; only the person's own
+   * lightweight rows (unpaid dues, subject assignments, routine slots)
+   * cascade, together with the linked login account.
+   */
+  async remove(resource: Resource, user: AuthUser, id: string) {
+    if (resource === 'students') return this.removeStudent(user, id);
+    if (resource === 'teachers') return this.removeTeacher(user, id);
+    const table = tables[resource];
+    const [row] = await this.db
+      .delete(table)
+      .where(and(eq(table.id, id), eq(table.schoolId, user.schoolId)))
+      .returning();
+    if (!row) throw new NotFoundException('রেকর্ড পাওয়া যায়নি');
+    return { data: { id } };
+  }
+  private async removeStudent(user: AuthUser, id: string) {
+    const [student] = await this.db
+      .select()
+      .from(students)
+      .where(and(eq(students.id, id), eq(students.schoolId, user.schoolId)))
+      .limit(1);
+    if (!student) throw new NotFoundException('শিক্ষার্থী পাওয়া যায়নি');
+    const [paymentRows, markRows, resultRows, attendanceRows, allFees] =
+      await Promise.all([
+        this.db
+          .select({ id: payments.id })
+          .from(payments)
+          .where(eq(payments.studentId, id))
+          .limit(1),
+        this.db
+          .select({ id: marks.id })
+          .from(marks)
+          .where(eq(marks.studentId, id))
+          .limit(1),
+        this.db
+          .select({ id: results.id })
+          .from(results)
+          .where(eq(results.studentId, id))
+          .limit(1),
+        this.db
+          .select({ id: attendance.id })
+          .from(attendance)
+          .where(eq(attendance.studentId, id))
+          .limit(1),
+        this.db
+          .select({ id: studentFees.id, paidAmount: studentFees.paidAmount })
+          .from(studentFees)
+          .where(eq(studentFees.studentId, id)),
+      ]);
+    const hasPaidFee = allFees.some((row) => row.paidAmount > 0);
+    if (
+      paymentRows.length ||
+      markRows.length ||
+      resultRows.length ||
+      attendanceRows.length ||
+      hasPaidFee
+    )
+      throw new BadRequestException(
+        'এই শিক্ষার্থীর হাজিরা/নম্বর/ফলাফল/পেমেন্ট রেকর্ড আছে, তাই মোছা যাবে না',
+      );
+    await this.db.transaction(async (tx) => {
+      if (allFees.length)
+        await tx.delete(studentFees).where(eq(studentFees.studentId, id));
+      await tx
+        .update(admissionApplications)
+        .set({ studentId: null, updatedAt: new Date() })
+        .where(eq(admissionApplications.studentId, id));
+      await tx
+        .delete(students)
+        .where(and(eq(students.id, id), eq(students.schoolId, user.schoolId)));
+      await tx.delete(users).where(eq(users.id, student.userId));
+    });
+    return { data: { id } };
+  }
+  private async removeTeacher(user: AuthUser, id: string) {
+    const [teacher] = await this.db
+      .select()
+      .from(teachers)
+      .where(and(eq(teachers.id, id), eq(teachers.schoolId, user.schoolId)))
+      .limit(1);
+    if (!teacher) throw new NotFoundException('শিক্ষক পাওয়া যায়নি');
+    const [salaryRows, markRows] = await Promise.all([
+      this.db
+        .select({ id: salaryRecords.id })
+        .from(salaryRecords)
+        .where(eq(salaryRecords.teacherId, id))
+        .limit(1),
+      this.db
+        .select({ id: marks.id })
+        .from(marks)
+        .where(eq(marks.teacherId, id))
+        .limit(1),
+    ]);
+    if (salaryRows.length || markRows.length)
+      throw new BadRequestException(
+        'এই শিক্ষকের বেতন/নম্বর এন্ট্রির রেকর্ড আছে, তাই মোছা যাবে না',
+      );
+    await this.db.transaction(async (tx) => {
+      await tx
+        .delete(subjectAssignments)
+        .where(eq(subjectAssignments.teacherId, id));
+      await tx
+        .delete(routineEntries)
+        .where(eq(routineEntries.teacherId, id));
+      await tx
+        .delete(teachers)
+        .where(and(eq(teachers.id, id), eq(teachers.schoolId, user.schoolId)));
+      await tx.delete(users).where(eq(users.id, teacher.userId));
+    });
+    return { data: { id } };
   }
   async promote(
     user: AuthUser,

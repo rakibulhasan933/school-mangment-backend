@@ -90,6 +90,36 @@ export function isStaffOnlyAudience(audience?: string | null): boolean {
   return STAFF_ONLY_AUDIENCES.includes((audience ?? 'public').toLowerCase());
 }
 
+/**
+ * Round 7 / Fix 1: `banners.image_url` and `gallery_items.image_url`
+ * are nullable — a banner or gallery photo may legitimately have no
+ * image yet, and the frontends render the designed placeholder
+ * treatment for null. Create payloads may therefore omit `imageUrl`
+ * entirely, and an empty string from an editor means "no image" too;
+ * both are stored as SQL NULL so reads always serialise
+ * `imageUrl: null`, never undefined or ''.
+ */
+export function withDefaultImageUrl(
+  value: Record<string, unknown>,
+): Record<string, unknown> {
+  const imageUrl = value.imageUrl;
+  if (imageUrl === undefined || imageUrl === null || imageUrl === '')
+    return { ...value, imageUrl: null };
+  return value;
+}
+
+/**
+ * PATCH counterpart of {@link withDefaultImageUrl}: only normalises
+ * when the `imageUrl` key is actually present, so an update that does
+ * not mention the image leaves the stored value untouched.
+ */
+export function withPatchedImageUrl(
+  value: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!('imageUrl' in value)) return value;
+  return withDefaultImageUrl(value);
+}
+
 @Injectable()
 export class ContentService {
   private readonly db = createDb();
@@ -392,6 +422,30 @@ export class ContentService {
     };
   }
 
+  /** B9: published, in-window notices for the teacher dashboard feed. */
+  async listPublishedNotices(schoolId: string) {
+    const now = new Date();
+    const rows = await this.db
+      .select()
+      .from(notices)
+      .where(
+        and(
+          eq(notices.schoolId, schoolId),
+          eq(notices.isPublished, true),
+          or(isNull(notices.publishAt), lte(notices.publishAt, now)),
+          or(isNull(notices.expiresAt), gt(notices.expiresAt, now)),
+        ),
+      )
+      .orderBy(desc(notices.isPinned), desc(notices.createdAt));
+    return {
+      data: rows.filter((row) => {
+        const audience = (row.audience ?? 'public').toLowerCase();
+        if (audience === 'student' || audience === 'students') return false;
+        return !row.audienceClass?.trim();
+      }),
+    };
+  }
+
   async publicList(resource: string, schoolId: string) {
     const now = new Date();
     switch (resource) {
@@ -552,9 +606,12 @@ export class ContentService {
     value: Record<string, unknown>,
   ) {
     const table = this.table(resource);
+    // Fix 1: a banner may be created without an image (nullable column).
+    const stored =
+      resource === 'banners' ? withDefaultImageUrl(value) : value;
     const result = await this.db
       .insert(table)
-      .values({ ...value, schoolId: user.schoolId } as never)
+      .values({ ...stored, schoolId: user.schoolId } as never)
       .returning();
     return { data: result[0] };
   }
@@ -584,9 +641,12 @@ export class ContentService {
     const school = this.schoolColumn(resource as ContentResource);
     if (!school)
       throw new NotFoundException('কনটেন্টের প্রতিষ্ঠান নির্ধারণ করা যায়নি');
+    // Fix 1: a banner update may explicitly clear the image (null/'').
+    const stored =
+      resource === 'banners' ? withPatchedImageUrl(value) : value;
     const result = await this.db
       .update(table)
-      .set({ ...value, updatedAt: new Date() } as never)
+      .set({ ...stored, updatedAt: new Date() } as never)
       .where(and(eq(table.id, id), eq(school, user.schoolId as never)))
       .returning();
     if (!result[0]) throw new NotFoundException('কনটেন্ট পাওয়া যায়নি');
@@ -598,6 +658,29 @@ export class ContentService {
     const school = this.schoolColumn(resource as ContentResource);
     if (!school)
       throw new NotFoundException('কনটেন্টের প্রতিষ্ঠান নির্ধারণ করা যায়নি');
+    // B3/B12: parent resources own their child items (menu items,
+    // service-box links, gallery photos are meaningless without the
+    // parent) — delete children first, in the caller's school scope,
+    // so the DELETE cannot die on a foreign-key error and silently
+    // leave the record in place.
+    if (resource === 'menus' || resource === 'serviceBoxes' || resource === 'galleries') {
+      const parent = await this.db
+        .select({ id: table.id })
+        .from(table)
+        .where(and(eq(table.id, id), eq(school, user.schoolId as never)))
+        .limit(1);
+      if (!parent[0]) throw new NotFoundException('কনটেন্ট পাওয়া যায়নি');
+      if (resource === 'menus')
+        await this.db.delete(menuItems).where(eq(menuItems.menuId, id));
+      else if (resource === 'serviceBoxes')
+        await this.db
+          .delete(serviceBoxLinks)
+          .where(eq(serviceBoxLinks.serviceBoxId, id));
+      else
+        await this.db
+          .delete(galleryItems)
+          .where(eq(galleryItems.galleryId, id));
+    }
     const result = await this.db
       .delete(table)
       .where(and(eq(table.id, id), eq(school, user.schoolId as never)))
@@ -685,9 +768,12 @@ export class ContentService {
         : kind === 'serviceBoxLinks'
           ? 'serviceBoxId'
           : 'galleryId';
+    // Fix 1: a gallery item may be created without an image (nullable).
+    const stored =
+      kind === 'galleryItems' ? withDefaultImageUrl(value) : value;
     const result = await this.db
       .insert(table)
-      .values({ ...value, [parentKey]: parentId } as never)
+      .values({ ...stored, [parentKey]: parentId } as never)
       .returning();
     return { data: result[0] };
   }
@@ -708,9 +794,12 @@ export class ContentService {
           : galleryItems;
     if (!existing.data.some((item) => item.id === id))
       throw new NotFoundException('কনটেন্ট পাওয়া যায়নি');
+    // Fix 1: a gallery-item update may explicitly clear the image.
+    const stored =
+      kind === 'galleryItems' ? withPatchedImageUrl(value) : value;
     const result = await this.db
       .update(table)
-      .set({ ...value, updatedAt: new Date() } as never)
+      .set({ ...stored, updatedAt: new Date() } as never)
       .where(eq(table.id, id))
       .returning();
     return { data: result[0] };

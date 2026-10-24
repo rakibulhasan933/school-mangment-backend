@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -60,6 +61,30 @@ export class FinanceController {
   ) {
     return this.finance.copyEvent(req.user, id, body.dueDate);
   }
+  @Delete('fee-events/:id') removeEvent(
+    @Req() req: AuthenticatedRequest,
+    @Param('id') id: string,
+  ) {
+    return this.finance.removeEvent(req.user, id);
+  }
+  @Delete('payments/:id') removePayment(
+    @Req() req: AuthenticatedRequest,
+    @Param('id') id: string,
+  ) {
+    return this.finance.removePayment(req.user, id);
+  }
+  @Delete('salary/:id') removeSalary(
+    @Req() req: AuthenticatedRequest,
+    @Param('id') id: string,
+  ) {
+    return this.finance.removeSalary(req.user, id);
+  }
+  @Delete('ledger/:id') removeLedgerEntry(
+    @Req() req: AuthenticatedRequest,
+    @Param('id') id: string,
+  ) {
+    return this.finance.removeLedgerEntry(req.user, id);
+  }
   @Post('dues/:id/pay') pay(
     @Req() req: AuthenticatedRequest,
     @Param('id') id: string,
@@ -82,6 +107,12 @@ export class FinanceController {
     @Query('to') to?: string,
   ) {
     return this.finance.ledger(req.user.schoolId, from, to);
+  }
+  @Get('students/:studentId/statement') statement(
+    @Req() req: AuthenticatedRequest,
+    @Param('studentId') studentId: string,
+  ) {
+    return this.finance.studentStatement(req.user, studentId);
   }
 }
 

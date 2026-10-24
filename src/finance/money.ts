@@ -21,6 +21,25 @@ export function generateDues(
     }));
 }
 
+export type FeeStatus = 'DUE' | 'PARTIAL' | 'PAID';
+
+/**
+ * The one canonical fee-status derivation (Round 6, B6). Every read path
+ * (collection list, fee-event counts, student portal, reports) must derive
+ * the status from the amounts with this function instead of trusting the
+ * stored status column, which older writes could leave stale — a student
+ * who paid 500 of 600 was displayed as fully paid (পরিশোধিত).
+ *   paid <= 0        -> DUE
+ *   0 < paid < due   -> PARTIAL
+ *   paid >= due      -> PAID
+ */
+export function deriveFeeStatus(amount: number, paidAmount: number): FeeStatus {
+  if (!Number.isFinite(amount) || !Number.isFinite(paidAmount)) return 'DUE';
+  if (paidAmount <= 0) return 'DUE';
+  if (paidAmount >= amount) return 'PAID';
+  return 'PARTIAL';
+}
+
 export function applyPayment(amount: number, payment: number) {
   if (
     !Number.isInteger(amount) ||
@@ -34,7 +53,7 @@ export function applyPayment(amount: number, payment: number) {
   return {
     paidAmount,
     remaining: amount - paidAmount,
-    status: paidAmount === amount ? ('PAID' as const) : ('PARTIAL' as const),
+    status: deriveFeeStatus(amount, paidAmount),
   };
 }
 

@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -48,6 +49,14 @@ export class PeopleController {
     @Body() dto: ContentMutationDto,
   ) {
     return this.people.update(resource, req.user, id, dto.value);
+  }
+  @Delete(':resource/:id') remove(
+    @Param('resource')
+    resource: 'students' | 'teachers' | 'staff' | 'subjectAssignments',
+    @Param('id') id: string,
+    @Req() req: AuthenticatedRequest,
+  ) {
+    return this.people.remove(resource, req.user, id);
   }
   @Post('students/import') import(
     @Req() req: AuthenticatedRequest,

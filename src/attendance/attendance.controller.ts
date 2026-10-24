@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Param,
   Post,
   Query,
   Req,
@@ -45,6 +46,13 @@ export class AttendanceController {
     @Query('to') to?: string,
   ) {
     return this.attendance.report(req.user.schoolId, from, to);
+  }
+  @Get('students/:studentId') @Roles('ADMIN') studentAttendance(
+    @Req() req: AuthenticatedRequest,
+    @Param('studentId') studentId: string,
+    @Query('month') month?: string,
+  ) {
+    return this.attendance.studentAttendance(req.user, studentId, month);
   }
 }
 @Controller('public/attendance')

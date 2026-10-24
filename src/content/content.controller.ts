@@ -1,7 +1,6 @@
 import {
   Body,
   Controller,
-  Delete,
   Get,
   Param,
   Patch,
@@ -25,10 +24,20 @@ import { PublicMessageDto } from './dto/public-message.dto.js';
 @UseGuards(JwtAuthGuard, RolesGuard, TenantGuard)
 export class ContentController {
   constructor(private readonly content: ContentService) {}
-  @Get(':resource') @Roles('ADMIN') list(
+  @Get(':resource') @Roles('ADMIN', 'TEACHER') list(
     @Param('resource') resource: string,
     @Req() request: AuthenticatedRequest,
   ) {
+    // B9: teachers may read ONLY the notices list (their dashboard's
+    // "সাম্প্রতিক বিজ্ঞপ্তি" reads /content/notices and used to get a
+    // 403, rendering empty). They see published, in-window notices —
+    // never drafts. Every other resource stays ADMIN-only, as do all
+    // writes below (each write route keeps its own @Roles('ADMIN')).
+    if (request.user.role === 'TEACHER') {
+      if (resource !== 'notices')
+        throw new ForbiddenException('শুধুমাত্র বিজ্ঞপ্তি দেখার অনুমতি আছে');
+      return this.content.listPublishedNotices(request.user.schoolId);
+    }
     return this.content.list(resource, request.user.schoolId);
   }
   @Post(':resource') @Roles('ADMIN') create(

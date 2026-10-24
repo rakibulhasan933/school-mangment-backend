@@ -3,7 +3,7 @@ import { and, eq, or } from 'drizzle-orm';
 import * as argon2 from 'argon2';
 import { SignJWT, jwtVerify } from 'jose';
 import { createDb } from '../db/index.js';
-import { users } from '../db/schema.js';
+import { students, users } from '../db/schema.js';
 import type {
   AccessTokenPayload,
   AuthUser,
@@ -52,12 +52,24 @@ export class AuthService {
         and(
           eq(users.isActive, true),
           eq(users.role, 'STUDENT'),
-          eq(users.registrationNumber, registrationNumber),
+          eq(users.registrationNumber, registrationNumber.trim()),
         ),
       )
       .limit(1);
     if (!user) throw new UnauthorizedException('রেজিস্ট্রেশন নম্বর সঠিক নয়');
-    return this.tokens(this.user(user));
+    // B1: the token's school must be the school of the student's own
+    // record. If the account row's schoolId has drifted from the student
+    // row's schoolId (stale account after a re-seed/reset), the portal
+    // would query a school where the student has no data at all.
+    const [student] = await this.db
+      .select({ schoolId: students.schoolId })
+      .from(students)
+      .where(eq(students.userId, user.id))
+      .limit(1);
+    const authUser = this.user(user);
+    if (student && student.schoolId !== authUser.schoolId)
+      authUser.schoolId = student.schoolId;
+    return this.tokens(authUser);
   }
 
   async changePassword(userId: string, dto: ChangePasswordDto) {

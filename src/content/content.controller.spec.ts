@@ -71,6 +71,37 @@ describe('ContentController.removeChild', () => {
   });
 });
 
+describe('ContentController.list teacher access (B9)', () => {
+  const teacherRequest = {
+    user: { schoolId: 'school-1', role: 'TEACHER' },
+  } as unknown as AuthenticatedRequest;
+
+  it('lets a teacher read the published notices feed', async () => {
+    const listPublishedNotices = vi
+      .fn()
+      .mockResolvedValue({ data: [{ id: 'n1' }] });
+    const controller = controllerWith({ listPublishedNotices });
+    await expect(
+      controller.list('notices', teacherRequest),
+    ).resolves.toEqual({ data: [{ id: 'n1' }] });
+    expect(listPublishedNotices).toHaveBeenCalledWith('school-1');
+  });
+
+  it('forbids teachers from every other content resource', async () => {
+    const controller = controllerWith({});
+    expect(() => controller.list('pages', teacherRequest)).toThrow(
+      'শুধুমাত্র বিজ্ঞপ্তি দেখার অনুমতি আছে',
+    );
+  });
+
+  it('keeps the admin list path unchanged', async () => {
+    const list = vi.fn().mockResolvedValue({ data: [] });
+    const controller = controllerWith({ list });
+    await controller.list('homepageBlocks', request);
+    expect(list).toHaveBeenCalledWith('homepageBlocks', 'school-1');
+  });
+});
+
 describe('isPubliclyVisible', () => {
   it('keeps rows without any visibility flag visible', () => {
     expect(isPubliclyVisible({ titleBn: 'ইভেন্ট' })).toBe(true);

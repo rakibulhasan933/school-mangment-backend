@@ -1,7 +1,9 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
+  NotFoundException,
   Param,
   Patch,
   Post,
@@ -93,6 +95,23 @@ export class RoutineController {
       )
       .returning();
     return { data: row };
+  }
+  /** B12: delete one routine slot (ADMIN, own school only). */
+  @Delete(':id') @Roles('ADMIN') async remove(
+    @Req() request: AuthenticatedRequest,
+    @Param('id') id: string,
+  ) {
+    const [row] = await this.db
+      .delete(routineEntries)
+      .where(
+        and(
+          eq(routineEntries.id, id),
+          eq(routineEntries.schoolId, request.user.schoolId),
+        ),
+      )
+      .returning({ id: routineEntries.id });
+    if (!row) throw new NotFoundException('রুটিন এন্ট্রি পাওয়া যায়নি');
+    return { data: { id: row.id } };
   }
   private async rows(schoolId: string) {
     return this.db
