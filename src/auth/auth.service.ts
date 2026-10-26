@@ -13,10 +13,12 @@ import type {
 } from './auth.types.js';
 import type { LoginDto } from './dto/login.dto.js';
 import type { ChangePasswordDto } from './dto/change-password.dto.js';
+import { AuthRateLimit } from './auth-rate-limit.js';
 
 @Injectable()
 export class AuthService {
   private readonly db = createDb();
+  private readonly rateLimit = new AuthRateLimit();
   private key() {
     const secret = process.env.JWT_SECRET;
     if (!secret || secret.length < 32)
@@ -24,8 +26,9 @@ export class AuthService {
     return new TextEncoder().encode(secret);
   }
 
-  async login(dto: LoginDto) {
+  async login(dto: LoginDto, ip = 'unknown') {
     const email = dto.email.trim().toLowerCase();
+    this.rateLimit.check('login', ip, email);
     const [user] = await this.db
       .select()
       .from(users)
@@ -46,8 +49,9 @@ export class AuthService {
     return this.tokens(this.user(user));
   }
 
-  async forgotPassword(emailInput: string) {
+  async forgotPassword(emailInput: string, ip = 'unknown') {
     const email = emailInput.trim().toLowerCase();
+    this.rateLimit.check('forgot-password', ip, email);
     const [user] = await this.db
       .select({ id: users.id, email: users.email, role: users.role })
       .from(users)
