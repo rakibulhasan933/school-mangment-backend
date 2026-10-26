@@ -61,12 +61,17 @@ export class AuthService {
       .limit(1);
 
     if (user?.email) {
+      const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
       const rawToken = randomBytes(32).toString('hex');
       const tokenHash = createHash('sha256').update(rawToken).digest('hex');
+      await this.db
+        .update(passwordResetTokens)
+        .set({ usedAt: new Date(), updatedAt: new Date() })
+        .where(and(eq(passwordResetTokens.userId, user.id), isNull(passwordResetTokens.usedAt)));
       await this.db.insert(passwordResetTokens).values({
         userId: user.id,
         tokenHash,
-        expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+        expiresAt,
       });
       await this.sendResetEmail(user.email, rawToken);
     }
@@ -132,13 +137,13 @@ export class AuthService {
         : undefined,
     });
     const appUrl = (process.env.ADMIN_APP_URL ?? 'http://localhost:3001').replace(/\/$/, '');
-    const link = `${appUrl}/reset-password?token=${encodeURIComponent(rawToken)}`;
+    const link = `${appUrl}/forgot-password?token=${encodeURIComponent(rawToken)}`;
     await transporter.sendMail({
       from,
       to: email,
       subject: 'পাসওয়ার্ড রিসেট লিংক',
-      text: `আপনার পাসওয়ার্ড রিসেট করতে এই লিংকে যান: ${link}\nলিংকটি ১ ঘণ্টা পর মেয়াদোত্তীর্ণ হবে।`,
-      html: `<p>আপনার পাসওয়ার্ড রিসেট করতে নিচের লিংকে যান।</p><p><a href="${link}">পাসওয়ার্ড রিসেট করুন</a></p><p>লিংকটি ১ ঘণ্টা পর মেয়াদোত্তীর্ণ হবে।</p>`,
+      text: `আপনার পাসওয়ার্ড রিসেট করতে এই লিংকে যান: ${link}\nলিংকটি ১৫ মিনিট পর মেয়াদোত্তীর্ণ হবে।`,
+      html: `<p>আপনার পাসওয়ার্ড রিসেট করতে নিচের লিংকে যান।</p><p><a href="${link}">পাসওয়ার্ড রিসেট করুন</a></p><p>লিংকটি ১৫ মিনিট পর মেয়াদোত্তীর্ণ হবে।</p>`,
     });
   }
 
