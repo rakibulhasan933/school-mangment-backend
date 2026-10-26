@@ -78,8 +78,10 @@ export class AuthService {
 
     return {
       data: {
-        message:
-          'ইমেইলটি সঠিক হলে পাসওয়ার্ড রিসেটের লিংক পাঠানো হয়েছে।',
+        sent: Boolean(user?.email),
+        message: user?.email
+          ? 'পাসওয়ার্ড রিসেটের লিংক email-এ পাঠানো হয়েছে।'
+          : 'এই email-এর কোনো সক্রিয় Admin বা Teacher account পাওয়া যায়নি।',
       },
     };
   }
