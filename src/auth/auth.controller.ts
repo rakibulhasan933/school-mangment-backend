@@ -1,5 +1,4 @@
 import { Body, Controller, Post, Req, UseGuards } from '@nestjs/common';
-import type { Request } from 'express';
 import { AuthService } from './auth.service.js';
 import { LoginDto } from './dto/login.dto.js';
 import { RefreshTokenDto } from './dto/refresh-token.dto.js';
@@ -16,17 +15,11 @@ import { ResetPasswordDto } from './dto/reset-password.dto.js';
 @Controller('auth')
 export class AuthController {
   constructor(private readonly auth: AuthService) {}
-  @Post('login') login(@Body() dto: LoginDto, @Req() request: Request) {
-    return this.auth.login(dto, this.clientIp(request));
+  @Post('login') login(@Body() dto: LoginDto) {
+    return this.auth.login(dto);
   }
-  @Post('forgot-password') forgotPassword(@Body() dto: ForgotPasswordDto, @Req() request: Request) {
-    return this.auth.forgotPassword(dto.email, this.clientIp(request));
-  }
-
-  private clientIp(request: Request) {
-    const forwarded = request.headers['x-forwarded-for'];
-    if (typeof forwarded === 'string' && forwarded.length > 0) return forwarded.split(',')[0]!.trim();
-    return request.ip || request.socket.remoteAddress || 'unknown';
+  @Post('forgot-password') forgotPassword(@Body() dto: ForgotPasswordDto) {
+    return this.auth.forgotPassword(dto.email);
   }
   @Post('reset-password') resetPassword(@Body() dto: ResetPasswordDto) {
     return this.auth.resetPassword(dto.token, dto.newPassword);
