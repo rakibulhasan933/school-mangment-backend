@@ -4,8 +4,8 @@ import { resolve } from 'node:path';
 if (existsSync(resolve(process.cwd(), '.env')))
   process.loadEnvFile(resolve(process.cwd(), '.env'));
 type Credentials = {
-  admin: { identifier: string; password: string };
-  teacher: { identifier: string; password: string };
+  admin: { email?: string; identifier?: string; password: string };
+  teacher: { email?: string; identifier?: string; password: string };
   students: string[];
 };
 const api = (
@@ -40,11 +40,11 @@ async function request(path: string, init: RequestInit = {}) {
     );
   return payload;
 }
-async function login(identifier: string, password?: string) {
+async function login(email: string, password?: string) {
   const path = password ? '/auth/login' : '/auth/student-login';
   const body = password
-    ? { identifier, password }
-    : { registrationNumber: identifier };
+    ? { email, password }
+    : { registrationNumber: email };
   const payload = await request(path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -57,12 +57,12 @@ async function login(identifier: string, password?: string) {
 }
 async function main() {
   const admin = await login(
-    credentials.admin.identifier,
+    credentials.admin.email ?? 'demo-admin@adarsha.test',
     credentials.admin.password,
   );
   console.log('[smoke] admin login: ok');
   const teacher = await login(
-    credentials.teacher.identifier,
+    credentials.teacher.email ?? 'demo-teacher@adarsha.test',
     credentials.teacher.password,
   );
   console.log('[smoke] teacher login: ok');

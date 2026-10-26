@@ -60,8 +60,8 @@ if (existsSync(resolve(process.cwd(), '.env')))
   process.loadEnvFile(resolve(process.cwd(), '.env'));
 
 type Credentials = {
-  admin: { identifier: string; password: string };
-  teacher: { identifier: string; password: string };
+  admin: { email: string; password: string; identifier?: string };
+  teacher: { email: string; password: string; identifier?: string };
   students: string[];
 };
 type SeedDb = ReturnType<typeof createDb>;
@@ -70,15 +70,25 @@ const fixedUuid = (number: number) =>
   `20000000-0000-4000-8000-${String(number).padStart(12, '0')}`;
 
 function credentials(): Credentials {
-  if (existsSync(credentialsPath))
-    return JSON.parse(readFileSync(credentialsPath, 'utf8')) as Credentials;
+  if (existsSync(credentialsPath)) {
+    const saved = JSON.parse(readFileSync(credentialsPath, 'utf8')) as {
+      admin: { password: string; email?: string; identifier?: string };
+      teacher: { password: string; email?: string; identifier?: string };
+      students: string[];
+    };
+    return {
+      admin: { email: saved.admin.email ?? 'demo-admin@adarsha.test', password: saved.admin.password, identifier: saved.admin.identifier },
+      teacher: { email: saved.teacher.email ?? 'demo-teacher@adarsha.test', password: saved.teacher.password, identifier: saved.teacher.identifier },
+      students: saved.students,
+    };
+  }
   const value: Credentials = {
     admin: {
-      identifier: 'demo-admin',
+      email: 'demo-admin@adarsha.test',
       password: randomBytes(18).toString('base64url'),
     },
     teacher: {
-      identifier: 'demo-teacher',
+      email: 'demo-teacher@adarsha.test',
       password: randomBytes(18).toString('base64url'),
     },
     students: ['26100001', '26100002', '26100003', '26100004', '26100005'],
@@ -151,16 +161,16 @@ async function seed(db: SeedDb) {
     {
       schoolId: school.id,
       role: 'ADMIN' as const,
-      username: login.admin.identifier,
-      email: 'demo-admin@adarsha.test',
+      username: login.admin.identifier ?? 'demo-admin',
+      email: login.admin.email,
       passwordHash: await argon2.hash(login.admin.password),
       displayNameBn: 'ডেমো প্রশাসক',
     },
     {
       schoolId: school.id,
       role: 'TEACHER' as const,
-      username: login.teacher.identifier,
-      email: 'demo-teacher@adarsha.test',
+      username: login.teacher.identifier ?? 'demo-teacher',
+      email: login.teacher.email,
       passwordHash: await argon2.hash(login.teacher.password),
       displayNameBn: teacherNamesBn[0]!,
     },

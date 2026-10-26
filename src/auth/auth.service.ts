@@ -1,9 +1,11 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
-import { and, eq, or } from 'drizzle-orm';
+import { and, eq, gt, isNull, or } from 'drizzle-orm';
 import * as argon2 from 'argon2';
 import { SignJWT, jwtVerify } from 'jose';
+import { createHash, randomBytes } from 'node:crypto';
+import * as nodemailer from 'nodemailer';
 import { createDb } from '../db/index.js';
-import { students, users } from '../db/schema.js';
+import { passwordResetTokens, students, users } from '../db/schema.js';
 import type {
   AccessTokenPayload,
   AuthUser,
@@ -23,14 +25,14 @@ export class AuthService {
   }
 
   async login(dto: LoginDto) {
-    const identifier = dto.identifier.trim().toLowerCase();
+    const email = dto.email.trim().toLowerCase();
     const [user] = await this.db
       .select()
       .from(users)
       .where(
         and(
           eq(users.isActive, true),
-          or(eq(users.email, identifier), eq(users.username, identifier)),
+          eq(users.email, email),
         ),
       )
       .limit(1);
@@ -40,8 +42,104 @@ export class AuthService {
       !user.passwordHash ||
       !(await argon2.verify(user.passwordHash, dto.password))
     )
-      throw new UnauthorizedException('ইউজারনেম বা পাসওয়ার্ড সঠিক নয়');
+      throw new UnauthorizedException('ইমেইল বা পাসওয়ার্ড সঠিক নয়');
     return this.tokens(this.user(user));
+  }
+
+  async forgotPassword(emailInput: string) {
+    const email = emailInput.trim().toLowerCase();
+    const [user] = await this.db
+      .select({ id: users.id, email: users.email, role: users.role })
+      .from(users)
+      .where(
+        and(
+          eq(users.email, email),
+          eq(users.isActive, true),
+          or(eq(users.role, 'ADMIN'), eq(users.role, 'TEACHER')),
+        ),
+      )
+      .limit(1);
+
+    if (user?.email) {
+      const rawToken = randomBytes(32).toString('hex');
+      const tokenHash = createHash('sha256').update(rawToken).digest('hex');
+      await this.db.insert(passwordResetTokens).values({
+        userId: user.id,
+        tokenHash,
+        expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+      });
+      await this.sendResetEmail(user.email, rawToken);
+    }
+
+    return {
+      data: {
+        message:
+          'ইমেইলটি সঠিক হলে পাসওয়ার্ড রিসেটের লিংক পাঠানো হয়েছে।',
+      },
+    };
+  }
+
+  async resetPassword(token: string, newPassword: string) {
+    const tokenHash = createHash('sha256').update(token).digest('hex');
+    const [reset] = await this.db
+      .select({ id: passwordResetTokens.id, userId: passwordResetTokens.userId })
+      .from(passwordResetTokens)
+      .where(
+        and(
+          eq(passwordResetTokens.tokenHash, tokenHash),
+          isNull(passwordResetTokens.usedAt),
+          gt(passwordResetTokens.expiresAt, new Date()),
+        ),
+      )
+      .limit(1);
+    if (!reset) throw new UnauthorizedException('রিসেট লিংকটি অবৈধ বা মেয়াদোত্তীর্ণ');
+
+    const [user] = await this.db
+      .select({ id: users.id })
+      .from(users)
+      .where(
+        and(
+          eq(users.id, reset.userId),
+          eq(users.isActive, true),
+          or(eq(users.role, 'ADMIN'), eq(users.role, 'TEACHER')),
+        ),
+      )
+      .limit(1);
+    if (!user) throw new UnauthorizedException('অ্যাকাউন্টটি সক্রিয় নয়');
+
+    await this.db
+      .update(users)
+      .set({ passwordHash: await argon2.hash(newPassword), updatedAt: new Date() })
+      .where(eq(users.id, user.id));
+    await this.db
+      .update(passwordResetTokens)
+      .set({ usedAt: new Date(), updatedAt: new Date() })
+      .where(eq(passwordResetTokens.id, reset.id));
+    return { data: { message: 'পাসওয়ার্ড পরিবর্তন হয়েছে' } };
+  }
+
+  private async sendResetEmail(email: string, rawToken: string) {
+    const host = process.env.SMTP_HOST;
+    const from = process.env.SMTP_FROM;
+    if (!host || !from) throw new Error('SMTP_HOST and SMTP_FROM are required for password reset');
+    const port = Number(process.env.SMTP_PORT ?? 587);
+    const transporter = nodemailer.createTransport({
+      host,
+      port,
+      secure: process.env.SMTP_SECURE === 'true' || port === 465,
+      auth: process.env.SMTP_USER
+        ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASSWORD ?? '' }
+        : undefined,
+    });
+    const appUrl = (process.env.ADMIN_APP_URL ?? 'http://localhost:3001').replace(/\/$/, '');
+    const link = `${appUrl}/reset-password?token=${encodeURIComponent(rawToken)}`;
+    await transporter.sendMail({
+      from,
+      to: email,
+      subject: 'পাসওয়ার্ড রিসেট লিংক',
+      text: `আপনার পাসওয়ার্ড রিসেট করতে এই লিংকে যান: ${link}\nলিংকটি ১ ঘণ্টা পর মেয়াদোত্তীর্ণ হবে।`,
+      html: `<p>আপনার পাসওয়ার্ড রিসেট করতে নিচের লিংকে যান।</p><p><a href="${link}">পাসওয়ার্ড রিসেট করুন</a></p><p>লিংকটি ১ ঘণ্টা পর মেয়াদোত্তীর্ণ হবে।</p>`,
+    });
   }
 
   async studentLogin(registrationNumber: string) {

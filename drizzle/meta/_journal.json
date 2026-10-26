@@ -71,6 +71,13 @@
       "when": 1792869755197,
       "tag": "0009_watery_vanisher",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1793019971653,
+      "tag": "0010_bent_darkhawk",
+      "breakpoints": true
     }
   ]
 }

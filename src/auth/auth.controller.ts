@@ -9,12 +9,20 @@ import { Roles } from './roles.decorator.js';
 import { RolesGuard } from './roles.guard.js';
 import { TenantGuard } from './tenant.guard.js';
 import { ResetTeacherPasswordDto } from './dto/reset-teacher-password.dto.js';
+import { ForgotPasswordDto } from './dto/forgot-password.dto.js';
+import { ResetPasswordDto } from './dto/reset-password.dto.js';
 
 @Controller('auth')
 export class AuthController {
   constructor(private readonly auth: AuthService) {}
   @Post('login') login(@Body() dto: LoginDto) {
     return this.auth.login(dto);
+  }
+  @Post('forgot-password') forgotPassword(@Body() dto: ForgotPasswordDto) {
+    return this.auth.forgotPassword(dto.email);
+  }
+  @Post('reset-password') resetPassword(@Body() dto: ResetPasswordDto) {
+    return this.auth.resetPassword(dto.token, dto.newPassword);
   }
   @Post('student-login') studentLogin(@Body() dto: StudentLoginDto) {
     return this.auth.studentLogin(dto.registrationNumber);
