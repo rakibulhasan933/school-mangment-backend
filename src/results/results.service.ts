@@ -715,11 +715,19 @@ export class ResultsService {
     );
     const subjectRows = await this.db
       .select({
+        code: subjects.code,
         subjectNameBn: subjects.nameBn,
         fullMarks: examSubjects.fullMarks,
         obtainedMarks: resultSubjects.totalMarks,
         grade: resultSubjects.letter,
         gradePoint: resultSubjects.gpa,
+        cq: marks.cq,
+        mcq: marks.mcq,
+        practical: marks.practical,
+        cqMarks: examSubjects.cqMarks,
+        mcqMarks: examSubjects.mcqMarks,
+        practicalMarks: examSubjects.practicalMarks,
+        isAbsent: resultSubjects.isAbsent,
       })
       .from(resultSubjects)
       .innerJoin(
@@ -727,6 +735,13 @@ export class ResultsService {
         eq(resultSubjects.examSubjectId, examSubjects.id),
       )
       .innerJoin(subjects, eq(examSubjects.subjectId, subjects.id))
+      .leftJoin(
+        marks,
+        and(
+          eq(marks.examSubjectId, resultSubjects.examSubjectId),
+          eq(marks.studentId, resultRow.result.studentId),
+        ),
+      )
       .where(eq(resultSubjects.resultId, resultRow.result.id));
 
     return {
@@ -822,6 +837,7 @@ export class ResultsService {
         ...row,
         subjects: await this.db
           .select({
+            code: subjects.code,
             nameBn: subjects.nameBn,
             totalMarks: resultSubjects.totalMarks,
             letter: resultSubjects.letter,
