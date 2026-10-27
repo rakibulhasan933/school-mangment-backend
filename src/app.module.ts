@@ -13,6 +13,7 @@ import { FinanceModule } from './finance/finance.module.js';
 import { AdmissionModule } from './admission/admission.module.js';
 import { DemoModule } from './demo/demo.module.js';
 import { PdfModule } from './pdf/pdf.module.js';
+import { SmsModule } from './sms/sms.module.js';
 
 @Module({
   imports: [
@@ -28,6 +29,7 @@ import { PdfModule } from './pdf/pdf.module.js';
     AdmissionModule,
     DemoModule,
     PdfModule,
+    SmsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

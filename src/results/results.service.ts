@@ -24,6 +24,7 @@ import {
   marks,
   resultSubjects,
   results,
+  schools,
   sections,
   students,
   subjects,
@@ -215,6 +216,84 @@ export class ResultsService {
       })),
     };
   }
+  /**
+   * Admit-card data for one exam: school identity, the exam, its subjects
+   * (with board codes) and every student of the exam's class. The admin
+   * app renders printable admit cards from this single payload; section
+   * filtering happens client-side from the section fields on each row.
+   */
+  async admitData(user: AuthUser, examId: string) {
+    const [exam] = await this.db
+      .select()
+      .from(exams)
+      .where(and(eq(exams.id, examId), eq(exams.schoolId, user.schoolId)))
+      .limit(1);
+    if (!exam) throw new NotFoundException('পরীক্ষা পাওয়া যায়নি');
+    const [school] = await this.db
+      .select({
+        nameBn: schools.nameBn,
+        nameEn: schools.nameEn,
+        eiin: schools.eiin,
+        address: schools.address,
+        logoUrl: schools.logoUrl,
+      })
+      .from(schools)
+      .where(eq(schools.id, user.schoolId))
+      .limit(1);
+    const [cls] = await this.db
+      .select({ nameBn: academicClasses.nameBn })
+      .from(academicClasses)
+      .where(eq(academicClasses.id, exam.classId))
+      .limit(1);
+    const subjectRows = await this.db
+      .select({
+        code: subjects.code,
+        nameBn: subjects.nameBn,
+        orderIndex: subjects.orderIndex,
+      })
+      .from(examSubjects)
+      .innerJoin(subjects, eq(subjects.id, examSubjects.subjectId))
+      .where(eq(examSubjects.examId, examId))
+      .orderBy(asc(subjects.orderIndex));
+    const studentRows = await this.db
+      .select({
+        id: students.id,
+        nameBn: users.displayNameBn,
+        nameEn: students.nameEn,
+        registrationNumber: users.registrationNumber,
+        roll: students.roll,
+        sectionId: students.sectionId,
+        sectionNameBn: sections.nameBn,
+        groupName: sections.groupName,
+        photoUrl: students.photoUrl,
+        fatherNameBn: students.fatherNameBn,
+      })
+      .from(students)
+      .innerJoin(users, eq(users.id, students.userId))
+      .leftJoin(sections, eq(sections.id, students.sectionId))
+      .where(
+        and(
+          eq(students.schoolId, user.schoolId),
+          eq(students.classId, exam.classId),
+        ),
+      )
+      .orderBy(asc(sections.nameBn), asc(students.roll));
+    return {
+      data: {
+        school,
+        exam: {
+          id: exam.id,
+          nameBn: exam.nameBn,
+          startsAt: exam.startsAt,
+          endsAt: exam.endsAt,
+        },
+        classNameBn: cls?.nameBn ?? '',
+        subjects: subjectRows,
+        students: studentRows,
+      },
+    };
+  }
+
   async publish(
     user: AuthUser,
     examId: string,

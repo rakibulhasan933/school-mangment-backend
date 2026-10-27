@@ -78,6 +78,13 @@
       "when": 1793019971653,
       "tag": "0010_bent_darkhawk",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1793124071053,
+      "tag": "0011_sms_logs",
+      "breakpoints": true
     }
   ]
 }

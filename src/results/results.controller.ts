@@ -73,6 +73,12 @@ export class ResultsController {
   ) {
     return this.results.removeScale(req.user, id);
   }
+  @Get('exams/:id/admit-data') @Roles('ADMIN') admitData(
+    @Req() req: AuthenticatedRequest,
+    @Param('id') id: string,
+  ) {
+    return this.results.admitData(req.user, id);
+  }
   @Patch('exams/:id/publish') @Roles('ADMIN') publish(
     @Req() req: AuthenticatedRequest,
     @Param('id') id: string,

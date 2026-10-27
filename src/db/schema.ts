@@ -927,6 +927,28 @@ export const ledgerEntries = pgTable('ledger_entries', {
   ...contentTimestamps,
 });
 
+/**
+ * SMS send log (Phase 2 — SMS module). One row per recipient per send.
+ * SMS configuration itself lives in the generic `settings` table under
+ * the key `sms` (provider credentials, sender id, templates), so this
+ * table is the only new storage the module needs.
+ */
+export const smsLogs = pgTable('sms_logs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  schoolId: uuid('school_id')
+    .notNull()
+    .references(() => schools.id),
+  kind: text('kind').notNull().default('manual'),
+  recipientName: text('recipient_name'),
+  mobile: text('mobile').notNull(),
+  message: text('message').notNull(),
+  segments: integer('segments').notNull().default(1),
+  status: text('status').notNull().default('test'),
+  providerResponse: text('provider_response'),
+  sentBy: uuid('sent_by').references(() => users.id),
+  ...contentTimestamps,
+});
+
 export type School = typeof schools.$inferSelect;
 export type NewSchool = typeof schools.$inferInsert;
 export type User = typeof users.$inferSelect;
