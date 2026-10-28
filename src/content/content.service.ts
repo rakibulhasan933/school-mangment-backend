@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import {
   and,
   asc,
@@ -118,6 +122,29 @@ export function withPatchedImageUrl(
 ): Record<string, unknown> {
   if (!('imageUrl' in value)) return value;
   return withDefaultImageUrl(value);
+}
+
+function parseNoticeDate(value: unknown, field: string): Date | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null || value === '') return null;
+  if (value instanceof Date) {
+    if (!Number.isNaN(value.getTime())) return value;
+  } else if (typeof value === 'string' || typeof value === 'number') {
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) return parsed;
+  }
+  throw new BadRequestException(`${field} তারিখটি সঠিক নয়`);
+}
+
+export function normaliseNoticeDates(
+  value: Record<string, unknown>,
+): Record<string, unknown> {
+  const stored = { ...value };
+  const publishAt = parseNoticeDate(value.publishAt, 'প্রকাশের');
+  const expiresAt = parseNoticeDate(value.expiresAt, 'মেয়াদ শেষের');
+  if (publishAt !== undefined) stored.publishAt = publishAt;
+  if (expiresAt !== undefined) stored.expiresAt = expiresAt;
+  return stored;
 }
 
 @Injectable()
@@ -608,7 +635,11 @@ export class ContentService {
     const table = this.table(resource);
     // Fix 1: a banner may be created without an image (nullable column).
     const stored =
-      resource === 'banners' ? withDefaultImageUrl(value) : value;
+      resource === 'banners'
+        ? withDefaultImageUrl(value)
+        : resource === 'notices'
+          ? normaliseNoticeDates(value)
+          : value;
     const result = await this.db
       .insert(table)
       .values({ ...stored, schoolId: user.schoolId } as never)
@@ -643,7 +674,11 @@ export class ContentService {
       throw new NotFoundException('কনটেন্টের প্রতিষ্ঠান নির্ধারণ করা যায়নি');
     // Fix 1: a banner update may explicitly clear the image (null/'').
     const stored =
-      resource === 'banners' ? withPatchedImageUrl(value) : value;
+      resource === 'banners'
+        ? withPatchedImageUrl(value)
+        : resource === 'notices'
+          ? normaliseNoticeDates(value)
+          : value;
     const result = await this.db
       .update(table)
       .set({ ...stored, updatedAt: new Date() } as never)

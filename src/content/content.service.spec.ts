@@ -6,7 +6,7 @@ vi.mock('../db/index.js', () => ({
   createDb: () => holder.current,
 }));
 
-import { ContentService } from './content.service.js';
+import { ContentService, normaliseNoticeDates } from './content.service.js';
 import type { AuthUser } from '../auth/auth.types.js';
 
 const admin = {
@@ -21,6 +21,23 @@ function setup(seed: Record<string, FakeRow[]>) {
   holder.current = fake.db;
   return { service: new ContentService(), fake };
 }
+
+describe('notice date normalisation', () => {
+  it('converts form date strings to Date values and allows blank dates', () => {
+    const result = normaliseNoticeDates({
+      publishAt: '2026-10-28T10:30',
+      expiresAt: '',
+    });
+    expect(result.publishAt).toBeInstanceOf(Date);
+    expect(result.expiresAt).toBeNull();
+  });
+
+  it('rejects malformed notice dates with a Bengali validation error', () => {
+    expect(() => normaliseNoticeDates({ publishAt: 'not-a-date' })).toThrow(
+      'প্রকাশের তারিখটি সঠিক নয়',
+    );
+  });
+});
 
 describe('ContentService.remove (B3)', () => {
   it('actually deletes a notice in the caller school', async () => {
