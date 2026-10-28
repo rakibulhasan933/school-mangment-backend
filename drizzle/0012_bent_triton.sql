@@ -1,0 +1,1 @@
+ALTER TABLE "subjects" ADD COLUMN "pair_subject_id" uuid;

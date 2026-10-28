@@ -538,6 +538,28 @@ export class ResultsService {
       .select()
       .from(examSubjects)
       .where(eq(examSubjects.examId, examId));
+    const pairBySubject = new Map<string, string | null>();
+    if (configurations.length) {
+      const subjectRows = await this.db
+        .select({ id: subjects.id, pairSubjectId: subjects.pairSubjectId })
+        .from(subjects)
+        .where(
+          inArray(
+            subjects.id,
+            configurations.map((configuration) => configuration.subjectId),
+          ),
+        );
+      for (const row of subjectRows) pairBySubject.set(row.id, row.pairSubjectId);
+    }
+    const configuredSubjectIds = new Set(
+      configurations.map((configuration) => configuration.subjectId),
+    );
+    const groupKeys = configurations.map((configuration) => {
+      const pairId = pairBySubject.get(configuration.subjectId);
+      return pairId && configuredSubjectIds.has(pairId)
+        ? [configuration.subjectId, pairId].sort().join(':')
+        : undefined;
+    });
     const classStudents = await this.db
       .select()
       .from(students)
@@ -568,7 +590,7 @@ export class ResultsService {
     const processed = [];
     for (const student of classStudents) {
       const subjectMarks = [];
-      for (const configuration of configurations) {
+      for (const [configIndex, configuration] of configurations.entries()) {
         const [mark] = await this.db
           .select()
           .from(marks)
@@ -583,6 +605,8 @@ export class ResultsService {
           total: mark?.total ?? 0,
           passMarks: configuration.passMarks,
           isAbsent: mark?.isAbsent ?? false,
+          fullMarks: configuration.fullMarks,
+          groupKey: groupKeys[configIndex],
         });
       }
       const result = processStudentResult(

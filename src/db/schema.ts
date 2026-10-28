@@ -416,6 +416,7 @@ export const subjects = pgTable('subjects', {
     .references(() => schools.id),
   nameBn: text('name_bn').notNull(),
   code: text('code'),
+  pairSubjectId: uuid('pair_subject_id'),
   fullMarks: integer('full_marks').notNull().default(100),
   cqMarks: integer('cq_marks').notNull().default(0),
   mcqMarks: integer('mcq_marks').notNull().default(0),
