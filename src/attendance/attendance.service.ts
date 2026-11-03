@@ -217,7 +217,7 @@ export class AttendanceService {
         roll: lowById.get(studentId)?.roll ?? null,
         ...value,
         percentage: Math.round((value.present * 10000) / value.total) / 100,
-      })),
+      })).sort((a, b) => (a.roll ?? Number.MAX_SAFE_INTEGER) - (b.roll ?? Number.MAX_SAFE_INTEGER) || String(a.studentNameBn ?? '').localeCompare(String(b.studentNameBn ?? ''))),
       threshold,
     };
   }

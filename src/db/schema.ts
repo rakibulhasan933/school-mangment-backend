@@ -720,8 +720,7 @@ export const rooms = pgTable('rooms', {
   nameBn: text('name_bn').notNull(),
   building: text('building'),
   floor: text('floor'),
-  benchRows: integer('bench_rows').notNull(),
-  benchColumns: integer('bench_columns').notNull(),
+  layout: jsonb('layout').$type<Array<{ benches: number }>>().notNull().default([]),
   isActive: boolean('is_active').notNull().default(true),
   ...contentTimestamps,
 });
@@ -732,7 +731,7 @@ export const seatPlans = pgTable('seat_plans', {
   sittingDate: text('sitting_date').notNull(),
   shift: text('shift').notNull(),
   status: text('status').notNull().default('draft'),
-  pattern: text('pattern').notNull().default('serial'),
+  pattern: text('pattern').notNull().default('roll_mix'),
   roomMode: text('room_mode').notNull().default('mixed'),
   perBench: integer('per_bench').notNull().default(1),
   feeEventId: uuid('fee_event_id').references(() => feeEvents.id),

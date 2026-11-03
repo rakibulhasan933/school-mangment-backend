@@ -73,8 +73,22 @@ export class PeopleController {
       sessionId: string;
       classId: string;
       sectionId?: string;
+      rollAssignments?: Array<{ studentId: string; roll: number }>;
+      sourceExamId?: string;
     },
   ) {
     return this.people.promote(req.user, body);
+  }
+  @Post('students/promote/preview') promotePreview(
+    @Req() req: AuthenticatedRequest,
+    @Body() body: {
+      studentIds: string[];
+      sessionId: string;
+      classId: string;
+      sectionId?: string;
+      sourceExamId: string;
+    },
+  ) {
+    return this.people.promotePreview(req.user, body);
   }
 }

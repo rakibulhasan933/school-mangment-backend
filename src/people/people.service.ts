@@ -4,12 +4,13 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { randomBytes } from 'node:crypto';
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, ne } from 'drizzle-orm';
 import * as argon2 from 'argon2';
 import { createDb } from '../db/index.js';
 import {
   academicClasses,
   academicSessions,
+  exams,
   admissionApplications,
   attendance,
   marks,
@@ -469,23 +470,53 @@ export class PeopleService {
       sessionId: string;
       classId: string;
       sectionId?: string;
+      rollAssignments?: Array<{ studentId: string; roll: number }>;
+      sourceExamId?: string;
     },
   ) {
-    const updated = [];
-    for (const id of value.studentIds) {
-      const [row] = await this.db
-        .update(students)
-        .set({
-          sessionId: value.sessionId,
-          classId: value.classId,
-          sectionId: value.sectionId,
-          updatedAt: new Date(),
-        })
-        .where(and(eq(students.id, id), eq(students.schoolId, user.schoolId)))
-        .returning();
-      if (row) updated.push(row);
+    const selected = new Set(value.studentIds);
+    if (value.rollAssignments) {
+      const assignments = value.rollAssignments;
+      const selectedRows = await this.db.select({ id: students.id, sectionId: students.sectionId }).from(students).where(and(eq(students.schoolId, user.schoolId), inArray(students.id, value.studentIds)));
+      const sectionFor = new Map(selectedRows.map((row) => [row.id, value.sectionId ?? row.sectionId ?? '__none__']));
+      const duplicates = assignments.filter((row, index) => assignments.findIndex((x) => `${sectionFor.get(x.studentId)}|${x.roll}` === `${sectionFor.get(row.studentId)}|${row.roll}`) !== index);
+      if (duplicates.length) throw new BadRequestException(`নতুন রোলে সংঘর্ষ: ${[...new Set(duplicates.map((row) => row.roll))].join(', ')}`);
+      const occupied = await this.db.select({ id: students.id, sectionId: students.sectionId, roll: students.roll }).from(students).where(and(eq(students.schoolId, user.schoolId), eq(students.sessionId, value.sessionId), eq(students.classId, value.classId), eq(students.isActive, true)));
+      const occupiedKeys = new Set(occupied.filter((row) => !selected.has(row.id) && row.roll != null).map((row) => `${row.sectionId ?? '__none__'}|${row.roll}`));
+      const conflicts = assignments.filter((row) => occupiedKeys.has(`${sectionFor.get(row.studentId)}|${row.roll}`));
+      if (conflicts.length) throw new BadRequestException(`নতুন রোলে সংঘর্ষ: ${[...new Set(conflicts.map((row) => row.roll))].join(', ')} — লক্ষ্য শ্রেণিতে ইতিমধ্যে ব্যবহৃত`);
+      if (assignments.some((row) => !selected.has(row.studentId) || row.roll < 1)) throw new BadRequestException('রোল অ্যাসাইনমেন্টে অবৈধ শিক্ষার্থী বা রোল আছে');
     }
+    const updated = await this.db.transaction(async (tx) => {
+      const rows = [];
+      for (const id of value.studentIds) {
+        const roll = value.rollAssignments?.find((item) => item.studentId === id)?.roll;
+        const [row] = await tx.update(students).set({ sessionId: value.sessionId, classId: value.classId, sectionId: value.sectionId, ...(roll == null ? {} : { roll }), updatedAt: new Date() }).where(and(eq(students.id, id), eq(students.schoolId, user.schoolId))).returning();
+        if (row) rows.push(row);
+      }
+      return rows;
+    });
     return { data: updated, count: updated.length };
+  }
+
+  async promotePreview(user: AuthUser, value: { studentIds: string[]; sessionId: string; classId: string; sectionId?: string; sourceExamId: string }) {
+    if (!value.studentIds.length || !value.sourceExamId) throw new BadRequestException('শিক্ষার্থী ও উৎস পরীক্ষা নির্বাচন করুন');
+    const [exam] = await this.db.select({ id: exams.id, nameBn: exams.nameBn, sessionId: exams.sessionId, classId: exams.classId, isPublished: exams.isPublished, publishAt: exams.publishAt }).from(exams).where(and(eq(exams.id, value.sourceExamId), eq(exams.schoolId, user.schoolId))).limit(1);
+    if (!exam || !exam.isPublished || (exam.publishAt && new Date(exam.publishAt).getTime() > Date.now())) throw new BadRequestException('উৎস পরীক্ষা প্রকাশিত নয়');
+    const sourceRows = await this.db.select({ student: students, nameBn: users.displayNameBn, result: results }).from(students).innerJoin(users, eq(users.id, students.userId)).leftJoin(results, and(eq(results.studentId, students.id), eq(results.examId, value.sourceExamId))).where(and(eq(students.schoolId, user.schoolId), inArray(students.id, value.studentIds)));
+    if (sourceRows.some((row) => row.student.classId !== exam.classId)) throw new BadRequestException('উৎস পরীক্ষা নির্বাচিত শিক্ষার্থীদের বর্তমান শ্রেণির নয়');
+    const targetSections = [...new Set(sourceRows.map((row) => value.sectionId ?? row.student.sectionId ?? '__none__'))];
+    const result = [];
+    for (const sectionKey of targetSections) {
+      const incoming = sourceRows.filter((row) => (value.sectionId ?? row.student.sectionId ?? '__none__') === sectionKey);
+      const selectedIds = new Set(incoming.map((row) => row.student.id));
+      const targetStudents = await this.db.select({ id: students.id, roll: students.roll }).from(students).where(and(eq(students.schoolId, user.schoolId), eq(students.sessionId, value.sessionId), eq(students.classId, value.classId), sectionKey === '__none__' ? isNull(students.sectionId) : eq(students.sectionId, sectionKey), eq(students.isActive, true)));
+      const occupied = new Set(targetStudents.filter((row) => !selectedIds.has(row.id) && row.roll != null).map((row) => row.roll as number));
+      const ordered = [...incoming].sort((a, b) => { const am = a.result?.meritPosition ?? Number.MAX_SAFE_INTEGER; const bm = b.result?.meritPosition ?? Number.MAX_SAFE_INTEGER; if (am !== bm) return am - bm; const at = a.result?.totalMarks ?? -1; const bt = b.result?.totalMarks ?? -1; if (at !== bt) return bt - at; const ar = a.student.roll ?? Number.MAX_SAFE_INTEGER; const br = b.student.roll ?? Number.MAX_SAFE_INTEGER; if (ar !== br) return ar - br; return a.nameBn.localeCompare(b.nameBn); });
+      let next = 1;
+      for (const row of ordered) { while (occupied.has(next)) next += 1; result.push({ studentId: row.student.id, nameBn: row.nameBn, oldRoll: row.student.roll, meritPosition: row.result?.meritPosition ?? null, totalMarks: row.result?.totalMarks ?? null, isPassed: row.result?.isPassed ?? false, newRoll: next, note: row.result ? (row.result.isPassed ? (next > (row.result.meritPosition ?? next) ? 'লক্ষ্য শ্রেণির দখলকৃত রোল এড়ানো হয়েছে' : '') : 'ফেল — Admin অনুমোদন সাপেক্ষে') : 'ফলাফল নেই — মেধা তালিকার পরে রাখা হয়েছে', sectionId: sectionKey === '__none__' ? null : sectionKey }); next += 1; }
+    }
+    return { data: result, sourceExam: { id: exam.id, nameBn: exam.nameBn }, conflicts: [] };
   }
   async importRows(user: AuthUser, rows: Array<Record<string, unknown>>) {
     const results = [];

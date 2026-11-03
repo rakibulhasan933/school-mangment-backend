@@ -753,6 +753,7 @@ export class ResultsService {
     const rows = await this.db
       .select({
         registrationNumber: users.registrationNumber,
+        roll: students.roll,
         nameBn: users.displayNameBn,
         classId: results.classId,
         totalMarks: results.totalMarks,
