@@ -322,6 +322,16 @@ export class SmsService {
     return { data: { ...result, recipients: recipients.length, skipped } };
   }
 
+  /** Reuses the configured provider/test-mode dispatch for seat-plan notices. */
+  async sendSeatPlan(
+    user: AuthUser,
+    items: Array<{ recipient: Recipient; message: string }>,
+  ) {
+    if (!items.length) throw new BadRequestException('আসন পাওয়া শিক্ষার্থীদের কোনো বৈধ মোবাইল নম্বর নেই');
+    const result = await this.dispatch(user, await this.getSettingsRaw(user.schoolId), 'seat_plan', items);
+    return { data: { ...result, recipients: items.length } };
+  }
+
   async sendDue(user: AuthUser, value: { feeEventId: string }) {
     const [event] = await this.db
       .select()

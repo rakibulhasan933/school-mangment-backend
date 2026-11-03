@@ -28,6 +28,11 @@ import {
   sections,
   students,
   subjects,
+  seatAssignments,
+  seatPlanRooms,
+  seatPlanSubjects,
+  seatPlans,
+  rooms,
   users,
 } from '../db/schema.js';
 import type { AuthUser } from '../auth/auth.types.js';
@@ -278,6 +283,27 @@ export class ResultsService {
         ),
       )
       .orderBy(asc(sections.nameBn), asc(students.roll));
+    const publishedSeats = await this.db
+      .select({
+        studentId: seatAssignments.studentId,
+        seatNo: seatAssignments.seatNo,
+        subjectNameBn: subjects.nameBn,
+        sittingDate: seatPlans.sittingDate,
+        shift: seatPlans.shift,
+        roomName: rooms.nameBn,
+        building: rooms.building,
+        floor: rooms.floor,
+      })
+      .from(seatAssignments)
+      .innerJoin(seatPlans, and(eq(seatPlans.id, seatAssignments.seatPlanId), eq(seatPlans.status, 'published')))
+      .innerJoin(seatPlanRooms, eq(seatPlanRooms.id, seatAssignments.seatPlanRoomId))
+      .innerJoin(rooms, eq(rooms.id, seatPlanRooms.roomId))
+      .innerJoin(seatPlanSubjects, eq(seatPlanSubjects.seatPlanId, seatPlans.id))
+      .innerJoin(examSubjects, eq(examSubjects.id, seatPlanSubjects.examSubjectId))
+      .innerJoin(subjects, eq(subjects.id, examSubjects.subjectId))
+      .where(and(eq(seatPlans.schoolId, user.schoolId), eq(examSubjects.examId, examId)));
+    const seatsByStudent = new Map<string, typeof publishedSeats>();
+    for (const seat of publishedSeats) seatsByStudent.set(seat.studentId, [...(seatsByStudent.get(seat.studentId) ?? []), seat]);
     return {
       data: {
         school,
@@ -289,7 +315,15 @@ export class ResultsService {
         },
         classNameBn: cls?.nameBn ?? '',
         subjects: subjectRows,
-        students: studentRows,
+        students: studentRows.map((student) => {
+          const seats = seatsByStudent.get(student.id) ?? [];
+          const pairs = new Set(seats.map((seat) => `${seat.roomName}|${seat.seatNo}`));
+          return {
+            ...student,
+            seat: pairs.size === 1 ? seats[0] : null,
+            seatPlans: pairs.size > 1 ? seats : [],
+          };
+        }),
       },
     };
   }

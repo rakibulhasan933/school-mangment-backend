@@ -14,6 +14,7 @@ import { AdmissionModule } from './admission/admission.module.js';
 import { DemoModule } from './demo/demo.module.js';
 import { PdfModule } from './pdf/pdf.module.js';
 import { SmsModule } from './sms/sms.module.js';
+import { SeatPlansModule } from './seat-plans/seat-plans.module.js';
 
 @Module({
   imports: [
@@ -30,6 +31,7 @@ import { SmsModule } from './sms/sms.module.js';
     DemoModule,
     PdfModule,
     SmsModule,
+    SeatPlansModule,
   ],
   controllers: [AppController],
   providers: [AppService],

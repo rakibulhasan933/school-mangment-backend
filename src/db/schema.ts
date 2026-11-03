@@ -714,6 +714,72 @@ export const resultSubjects = pgTable('result_subjects', {
   ...contentTimestamps,
 });
 
+export const rooms = pgTable('rooms', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  schoolId: uuid('school_id').notNull().references(() => schools.id),
+  nameBn: text('name_bn').notNull(),
+  building: text('building'),
+  floor: text('floor'),
+  benchRows: integer('bench_rows').notNull(),
+  benchColumns: integer('bench_columns').notNull(),
+  isActive: boolean('is_active').notNull().default(true),
+  ...contentTimestamps,
+});
+export const seatPlans = pgTable('seat_plans', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  schoolId: uuid('school_id').notNull().references(() => schools.id),
+  title: text('title').notNull(),
+  sittingDate: text('sitting_date').notNull(),
+  shift: text('shift').notNull(),
+  status: text('status').notNull().default('draft'),
+  pattern: text('pattern').notNull().default('serial'),
+  roomMode: text('room_mode').notNull().default('mixed'),
+  perBench: integer('per_bench').notNull().default(1),
+  feeEventId: uuid('fee_event_id').references(() => feeEvents.id),
+  eligibilitySource: text('eligibility_source').notNull().default('all'),
+  sourceExamId: uuid('source_exam_id').references(() => exams.id),
+  selectedSections: jsonb('selected_sections').notNull().default([]),
+  ...contentTimestamps,
+});
+export const seatPlanSubjects = pgTable('seat_plan_subjects', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  seatPlanId: uuid('seat_plan_id').notNull().references(() => seatPlans.id),
+  examSubjectId: uuid('exam_subject_id').notNull().references(() => examSubjects.id),
+  ...contentTimestamps,
+}, (t) => [uniqueIndex('seat_plan_subjects_unique').on(t.seatPlanId, t.examSubjectId)]);
+export const seatPlanRooms = pgTable('seat_plan_rooms', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  seatPlanId: uuid('seat_plan_id').notNull().references(() => seatPlans.id),
+  roomId: uuid('room_id').notNull().references(() => rooms.id),
+  sortOrder: integer('sort_order').notNull().default(0),
+  roomTeacherName: text('room_teacher_name'),
+  ...contentTimestamps,
+}, (t) => [uniqueIndex('seat_plan_rooms_unique').on(t.seatPlanId, t.roomId)]);
+export const seatPlanCandidates = pgTable('seat_plan_candidates', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  seatPlanId: uuid('seat_plan_id').notNull().references(() => seatPlans.id),
+  studentId: uuid('student_id').notNull().references(() => students.id),
+  examSubjectId: uuid('exam_subject_id').references(() => examSubjects.id),
+  status: text('status').notNull().default('approved'),
+  excludeReason: text('exclude_reason'),
+  isManualAdd: boolean('is_manual_add').notNull().default(false),
+  ...contentTimestamps,
+}, (t) => [uniqueIndex('seat_plan_candidates_unique').on(t.seatPlanId, t.studentId)]);
+export const seatAssignments = pgTable('seat_assignments', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  seatPlanId: uuid('seat_plan_id').notNull().references(() => seatPlans.id),
+  seatPlanRoomId: uuid('seat_plan_room_id').notNull().references(() => seatPlanRooms.id),
+  studentId: uuid('student_id').notNull().references(() => students.id),
+  seatNo: integer('seat_no').notNull(),
+  benchRow: integer('bench_row').notNull(),
+  benchColumn: integer('bench_column').notNull(),
+  benchSlot: integer('bench_slot').notNull().default(1),
+  ...contentTimestamps,
+}, (t) => [
+  uniqueIndex('seat_assignments_plan_student_unique').on(t.seatPlanId, t.studentId),
+  uniqueIndex('seat_assignments_room_seat_unique').on(t.seatPlanRoomId, t.seatNo),
+]);
+
 export const admissionSettings = pgTable(
   'admission_settings',
   {
