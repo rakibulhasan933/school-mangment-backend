@@ -773,6 +773,7 @@ export const seatAssignments = pgTable('seat_assignments', {
   benchRow: integer('bench_row').notNull(),
   benchColumn: integer('bench_column').notNull(),
   benchSlot: integer('bench_slot').notNull().default(1),
+  benchPosition: text('bench_position'),
   ...contentTimestamps,
 }, (t) => [
   uniqueIndex('seat_assignments_plan_student_unique').on(t.seatPlanId, t.studentId),
