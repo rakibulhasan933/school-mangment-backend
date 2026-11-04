@@ -74,6 +74,7 @@ type GenerateInput = {
   perBench: 1 | 2 | 3;
   roomTeacherNames?: Record<string, string>;
 };
+type EphemeralGenerateInput = { examSubjectIds: string[]; studentIds: string[]; roomIds: string[]; pattern: 'roll' | 'registration'; perBench: 1 | 2 | 3; sittingDate: string; shift: string; roomTeacherNames?: Record<string, string> };
 
 @Injectable()
 export class SeatPlansService {
@@ -98,6 +99,8 @@ export class SeatPlansService {
       layout: RoomLayoutRow[];
     },
   ) {
+    const duplicate = await this.db.select({ id: rooms.id }).from(rooms).where(and(eq(rooms.schoolId, user.schoolId), eq(rooms.nameBn, value.nameBn.trim()))).limit(1);
+    if (duplicate.length) throw new BadRequestException('এই নামে একটি রুম ইতিমধ্যে আছে');
     let layout: RoomLayoutRow[];
     try {
       layout = validateLayout(value.layout);
@@ -136,6 +139,7 @@ export class SeatPlansService {
       .where(and(eq(rooms.id, id), eq(rooms.schoolId, user.schoolId)))
       .limit(1);
     if (!current[0]) throw new NotFoundException('রুম পাওয়া যায়নি');
+    if (value.nameBn?.trim()) { const duplicate = await this.db.select({ id: rooms.id }).from(rooms).where(and(eq(rooms.schoolId, user.schoolId), eq(rooms.nameBn, value.nameBn.trim()), ne(rooms.id, id))).limit(1); if (duplicate.length) throw new BadRequestException('এই নামে একটি রুম ইতিমধ্যে আছে'); }
     if (value.layout) {
       try {
         value.layout = validateLayout(value.layout);
@@ -183,7 +187,27 @@ export class SeatPlansService {
     return { data: row };
   }
   async deleteRoom(user: AuthUser, id: string) {
-    return this.updateRoom(user, id, { isActive: false });
+    const refs = await this.db.select({ id: seatPlanRooms.id }).from(seatPlanRooms).innerJoin(seatPlans, eq(seatPlans.id, seatPlanRooms.seatPlanId)).where(and(eq(seatPlanRooms.roomId, id), eq(seatPlans.schoolId, user.schoolId)));
+    if (refs.length) throw new BadRequestException('এই কক্ষটি সংরক্ষিত সিট প্ল্যানে ব্যবহৃত। মুছতে হলে আগে নিষ্ক্রিয় করুন।');
+    const [row] = await this.db.delete(rooms).where(and(eq(rooms.id, id), eq(rooms.schoolId, user.schoolId))).returning();
+    if (!row) throw new NotFoundException('রুম পাওয়া যায়নি');
+    return { data: row };
+  }
+
+  async generateEphemeral(user: AuthUser, input: EphemeralGenerateInput) {
+    if (!input.studentIds?.length) throw new BadRequestException('অন্তত একজন শিক্ষার্থী নির্বাচন করুন');
+    if (!input.roomIds?.length) throw new BadRequestException('অন্তত একটি সক্রিয় রুম নির্বাচন করুন');
+    if (![1, 2, 3].includes(input.perBench)) throw new BadRequestException('প্রতি বেঞ্চে ১, ২ অথবা ৩ জন নির্বাচন করুন');
+    const roomRows = await this.db.select().from(rooms).where(and(eq(rooms.schoolId, user.schoolId), eq(rooms.isActive, true), inArray(rooms.id, input.roomIds)));
+    if (roomRows.length !== input.roomIds.length) throw new BadRequestException('নির্বাচিত সব রুম সক্রিয় নয় বা এই স্কুলের নয়');
+    const details = await this.db.select({ studentId: students.id, classId: students.classId, sectionId: students.sectionId, roll: students.roll, name: users.displayNameBn, registrationNumber: users.registrationNumber, classNameBn: academicClasses.nameBn, sectionNameBn: sections.nameBn, groupName: sections.groupName }).from(students).innerJoin(users, eq(users.id, students.userId)).leftJoin(academicClasses, eq(academicClasses.id, students.classId)).leftJoin(sections, eq(sections.id, students.sectionId)).where(and(eq(students.schoolId, user.schoolId), eq(students.isActive, true), inArray(students.id, input.studentIds)));
+    if (details.length !== new Set(input.studentIds).size) throw new BadRequestException('নির্বাচিত শিক্ষার্থীদের মধ্যে কিছু এই স্কুলের নয়');
+    const capacity = roomRows.reduce((sum, room) => sum + layoutCapacity(room.layout as RoomLayoutRow[], input.perBench), 0);
+    if (details.length > capacity) throw new BadRequestException('নির্বাচিত শিক্ষার্থী ' + details.length + ' জন, মোট আসন ' + capacity + 'টি — আরও রুম যোগ করুন');
+    const queue = input.pattern === 'registration' ? orderByRegistration(details) : [...details].sort((a, b) => (a.roll ?? Number.MAX_SAFE_INTEGER) - (b.roll ?? Number.MAX_SAFE_INTEGER) || a.name.localeCompare(b.name, 'bn'));
+    let offset = 0;
+    const roomsOutput = roomRows.map((room) => { const positions = seatPositions(room.layout as RoomLayoutRow[], input.perBench); const assignments = positions.slice(0, Math.max(0, Math.min(positions.length, queue.length - offset))).map((position, index) => { const student = queue[offset + index]!; return { ...position, seatNo: index + 1, roll: student.roll, registrationNumber: student.registrationNumber, classNameBn: student.classNameBn, sectionNameBn: student.sectionNameBn, groupName: student.groupName }; }); offset += assignments.length; return { roomId: room.id, roomName: room.nameBn, building: room.building, floor: room.floor, layout: room.layout, roomTeacherName: input.roomTeacherNames?.[room.id] ?? '', capacity: positions.length, seated: assignments.length, assignments }; });
+    return { data: { sittingDate: input.sittingDate, shift: input.shift, examSubjectIds: input.examSubjectIds, pattern: input.pattern, perBench: input.perBench, assigned: offset, capacity, rooms: roomsOutput } };
   }
 
   private async plan(schoolId: string, id: string) {
