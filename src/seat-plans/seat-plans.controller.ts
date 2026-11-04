@@ -17,6 +17,7 @@ export class SeatPlansController {
   @Post('seat-plans') @Roles('ADMIN') create(@Req() r: AuthenticatedRequest, @Body() b: Parameters<SeatPlansService['create']>[1]) { return this.service.create(r.user, b); }
   @Get('seat-plans/:id') @Roles('ADMIN') detail(@Req() r: AuthenticatedRequest, @Param('id') id: string) { return this.service.detail(r.user.schoolId, id); }
   @Get('seat-plans/:id/candidates') @Roles('ADMIN') candidates(@Req() r: AuthenticatedRequest, @Param('id') id: string) { return this.service.candidates(r.user.schoolId, id); }
+  @Patch('seat-plans/:id/selection') @Roles('ADMIN') selection(@Req() r: AuthenticatedRequest, @Param('id') id: string, @Body() b: { selectedSectionIds: string[] }) { return this.service.updateSelection(r.user, id, b.selectedSectionIds); }
   @Patch('seat-plans/:id/candidates') @Roles('ADMIN') editCandidates(@Req() r: AuthenticatedRequest, @Param('id') id: string, @Body() b: Parameters<SeatPlansService['editCandidates']>[2]) { return this.service.editCandidates(r.user, id, b); }
   @Post('seat-plans/:id/candidates/add') @Roles('ADMIN') addCandidate(@Req() r: AuthenticatedRequest, @Param('id') id: string, @Body() b: { registrationNumber: string }) { return this.service.addCandidate(r.user, id, b.registrationNumber); }
   @Post('seat-plans/:id/generate') @Roles('ADMIN') generate(@Req() r: AuthenticatedRequest, @Param('id') id: string, @Body() b: Parameters<SeatPlansService['generate']>[2]) { return this.service.generate(r.user, id, b); }

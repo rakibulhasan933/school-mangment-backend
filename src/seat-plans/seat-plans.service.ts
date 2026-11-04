@@ -1,99 +1,1275 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { and, asc, eq, inArray, ne } from 'drizzle-orm';
 import { createDb } from '../db/index.js';
-import { academicClasses, examSubjects, exams, resultSubjects, results, rooms, schools, sections, seatAssignments, seatPlanCandidates, seatPlanRooms, seatPlanSubjects, seatPlans, studentFees, students, subjectAssignments, subjects, users } from '../db/schema.js';
+import {
+  academicClasses,
+  examSubjects,
+  exams,
+  resultSubjects,
+  results,
+  rooms,
+  schools,
+  sections,
+  seatAssignments,
+  seatPlanCandidates,
+  seatPlanRooms,
+  seatPlanSubjects,
+  seatPlans,
+  studentFees,
+  students,
+  subjectAssignments,
+  subjects,
+  users,
+} from '../db/schema.js';
 import type { AuthUser } from '../auth/auth.types.js';
 import { resolveOwnStudent } from '../people/own-student.js';
 import { SmsService, normalizeBdMobile } from '../sms/sms.service.js';
-import { layoutCapacity, orderByRegistration, orderByRoll, seatPositions, validateLayout, type RoomLayoutRow } from './seat-plans.engine.js';
+import {
+  layoutCapacity,
+  orderByRegistration,
+  orderByRoll,
+  seatPositions,
+  validateLayout,
+  type RoomLayoutRow,
+} from './seat-plans.engine.js';
 
-type Candidate = { studentId: string; classId: string | null; sectionId: string | null; roll: number | null; name: string; registrationNumber: string | null; classNameBn: string | null; sectionNameBn: string | null; groupName: string | null; examSubjectId: string | null; feeStatus?: string };
-type CreateInput = { sittingDate: string; shift: string; title?: string; examSubjectIds: string[]; selectedSectionIds: string[]; eligibilitySource: 'all' | 'failed'; sourceExamId?: string; feeEventId?: string };
-type GenerateInput = { roomIds: string[]; roomMode: 'mixed' | 'separate_by_group'; pattern: 'roll_mix' | 'class_roll' | 'reg_serial' | 'serial' | 'class_mix' | 'group_mix' | 'zigzag'; perBench: 1 | 2 | 3; roomTeacherNames?: Record<string, string> };
+type Candidate = {
+  studentId: string;
+  classId: string | null;
+  sectionId: string | null;
+  roll: number | null;
+  name: string;
+  registrationNumber: string | null;
+  classNameBn: string | null;
+  sectionNameBn: string | null;
+  groupName: string | null;
+  examSubjectId: string | null;
+  feeStatus?: string;
+};
+type CreateInput = {
+  sittingDate: string;
+  shift: string;
+  title?: string;
+  examSubjectIds: string[];
+  selectedSectionIds: string[];
+  eligibilitySource: 'all' | 'failed';
+  sourceExamId?: string;
+  feeEventId?: string;
+};
+type GenerateInput = {
+  roomIds: string[];
+  roomMode: 'mixed' | 'separate_by_group';
+  pattern:
+    | 'roll_mix'
+    | 'class_roll'
+    | 'reg_serial'
+    | 'serial'
+    | 'class_mix'
+    | 'group_mix'
+    | 'zigzag';
+  perBench: 1 | 2 | 3;
+  roomTeacherNames?: Record<string, string>;
+};
 
 @Injectable()
 export class SeatPlansService {
   private readonly db = createDb();
   constructor(private readonly sms: SmsService) {}
 
-  async rooms(schoolId: string) { return { data: await this.db.select().from(rooms).where(eq(rooms.schoolId, schoolId)).orderBy(asc(rooms.nameBn)) }; }
-  async createRoom(user: AuthUser, value: { nameBn: string; building?: string; floor?: string; layout: RoomLayoutRow[] }) {
-    let layout: RoomLayoutRow[]; try { layout = validateLayout(value.layout); } catch (error) { throw new BadRequestException(error instanceof Error ? error.message : 'রুমের লেআউট সঠিক নয়'); }
-    const [row] = await this.db.insert(rooms).values({ schoolId: user.schoolId, nameBn: value.nameBn.trim(), building: value.building || null, floor: value.floor || null, layout }).returning();
+  async rooms(schoolId: string) {
+    return {
+      data: await this.db
+        .select()
+        .from(rooms)
+        .where(eq(rooms.schoolId, schoolId))
+        .orderBy(asc(rooms.nameBn)),
+    };
+  }
+  async createRoom(
+    user: AuthUser,
+    value: {
+      nameBn: string;
+      building?: string;
+      floor?: string;
+      layout: RoomLayoutRow[];
+    },
+  ) {
+    let layout: RoomLayoutRow[];
+    try {
+      layout = validateLayout(value.layout);
+    } catch (error) {
+      throw new BadRequestException(
+        error instanceof Error ? error.message : 'রুমের লেআউট সঠিক নয়',
+      );
+    }
+    const [row] = await this.db
+      .insert(rooms)
+      .values({
+        schoolId: user.schoolId,
+        nameBn: value.nameBn.trim(),
+        building: value.building || null,
+        floor: value.floor || null,
+        layout,
+      })
+      .returning();
     return { data: row };
   }
-  async updateRoom(user: AuthUser, id: string, value: Partial<{ nameBn: string; building: string | null; floor: string | null; layout: RoomLayoutRow[]; isActive: boolean; confirmDraftLayoutChange: boolean }>) {
-    const current = await this.db.select().from(rooms).where(and(eq(rooms.id, id), eq(rooms.schoolId, user.schoolId))).limit(1); if (!current[0]) throw new NotFoundException('রুম পাওয়া যায়নি');
+  async updateRoom(
+    user: AuthUser,
+    id: string,
+    value: Partial<{
+      nameBn: string;
+      building: string | null;
+      floor: string | null;
+      layout: RoomLayoutRow[];
+      isActive: boolean;
+      confirmDraftLayoutChange: boolean;
+    }>,
+  ) {
+    const current = await this.db
+      .select()
+      .from(rooms)
+      .where(and(eq(rooms.id, id), eq(rooms.schoolId, user.schoolId)))
+      .limit(1);
+    if (!current[0]) throw new NotFoundException('রুম পাওয়া যায়নি');
     if (value.layout) {
-      try { value.layout = validateLayout(value.layout); } catch (error) { throw new BadRequestException(error instanceof Error ? error.message : 'রুমের লেআউট সঠিক নয়'); }
-      const refs = await this.db.select({ title: seatPlans.title, status: seatPlans.status }).from(seatPlanRooms).innerJoin(seatPlans, eq(seatPlans.id, seatPlanRooms.seatPlanId)).where(and(eq(seatPlanRooms.roomId, id), eq(seatPlans.schoolId, user.schoolId)));
-      const locked = refs.find((ref) => ref.status === 'locked' || ref.status === 'published'); if (locked) throw new BadRequestException('কক্ষ ' + current[0].nameBn + ' "' + locked.title + '" প্ল্যানে ব্যবহৃত; লক/প্রকাশিত প্ল্যানে লেআউট বদলানো যাবে না');
-      if (refs.some((ref) => ref.status === 'draft') && !value.confirmDraftLayoutChange) throw new BadRequestException('এই কক্ষ খসড়া প্ল্যানে ব্যবহৃত। লেআউট বদলালে খসড়া প্ল্যান পুনরায় জেনারেট করতে হবে। নিশ্চিত করুন।');
+      try {
+        value.layout = validateLayout(value.layout);
+      } catch (error) {
+        throw new BadRequestException(
+          error instanceof Error ? error.message : 'রুমের লেআউট সঠিক নয়',
+        );
+      }
+      const refs = await this.db
+        .select({ title: seatPlans.title, status: seatPlans.status })
+        .from(seatPlanRooms)
+        .innerJoin(seatPlans, eq(seatPlans.id, seatPlanRooms.seatPlanId))
+        .where(
+          and(
+            eq(seatPlanRooms.roomId, id),
+            eq(seatPlans.schoolId, user.schoolId),
+          ),
+        );
+      const locked = refs.find(
+        (ref) => ref.status === 'locked' || ref.status === 'published',
+      );
+      if (locked)
+        throw new BadRequestException(
+          'কক্ষ ' +
+            current[0].nameBn +
+            ' "' +
+            locked.title +
+            '" প্ল্যানে ব্যবহৃত; লক/প্রকাশিত প্ল্যানে লেআউট বদলানো যাবে না',
+        );
+      if (
+        refs.some((ref) => ref.status === 'draft') &&
+        !value.confirmDraftLayoutChange
+      )
+        throw new BadRequestException(
+          'এই কক্ষ খসড়া প্ল্যানে ব্যবহৃত। লেআউট বদলালে খসড়া প্ল্যান পুনরায় জেনারেট করতে হবে। নিশ্চিত করুন।',
+        );
     }
     const { confirmDraftLayoutChange: _confirm, ...changes } = value;
-    const [row] = await this.db.update(rooms).set({ ...changes, updatedAt: new Date() }).where(and(eq(rooms.id, id), eq(rooms.schoolId, user.schoolId))).returning();
-    if (!row) throw new NotFoundException('রুম পাওয়া যায়নি'); return { data: row };
+    const [row] = await this.db
+      .update(rooms)
+      .set({ ...changes, updatedAt: new Date() })
+      .where(and(eq(rooms.id, id), eq(rooms.schoolId, user.schoolId)))
+      .returning();
+    if (!row) throw new NotFoundException('রুম পাওয়া যায়নি');
+    return { data: row };
   }
-  async deleteRoom(user: AuthUser, id: string) { return this.updateRoom(user, id, { isActive: false }); }
+  async deleteRoom(user: AuthUser, id: string) {
+    return this.updateRoom(user, id, { isActive: false });
+  }
 
   private async plan(schoolId: string, id: string) {
-    const [row] = await this.db.select().from(seatPlans).where(and(eq(seatPlans.id, id), eq(seatPlans.schoolId, schoolId))).limit(1);
-    if (!row) throw new NotFoundException('সিট প্ল্যান পাওয়া যায়নি'); return row;
+    const [row] = await this.db
+      .select()
+      .from(seatPlans)
+      .where(and(eq(seatPlans.id, id), eq(seatPlans.schoolId, schoolId)))
+      .limit(1);
+    if (!row) throw new NotFoundException('সিট প্ল্যান পাওয়া যায়নি');
+    return row;
   }
-  async list(schoolId: string, filter: { examId?: string; sittingDate?: string }) {
-    const rows = await this.db.select().from(seatPlans).where(and(eq(seatPlans.schoolId, schoolId), filter.sittingDate ? eq(seatPlans.sittingDate, filter.sittingDate) : undefined)).orderBy(asc(seatPlans.sittingDate));
+  async list(
+    schoolId: string,
+    filter: { examId?: string; sittingDate?: string },
+  ) {
+    const rows = await this.db
+      .select()
+      .from(seatPlans)
+      .where(
+        and(
+          eq(seatPlans.schoolId, schoolId),
+          filter.sittingDate
+            ? eq(seatPlans.sittingDate, filter.sittingDate)
+            : undefined,
+        ),
+      )
+      .orderBy(asc(seatPlans.sittingDate));
     const result = [];
-    for (const row of rows) { const links = await this.db.select({ examSubjectId: seatPlanSubjects.examSubjectId }).from(seatPlanSubjects).where(eq(seatPlanSubjects.seatPlanId, row.id)); if (filter.examId) { const es = await this.db.select({ id: examSubjects.id }).from(examSubjects).where(and(eq(examSubjects.examId, filter.examId), inArray(examSubjects.id, links.map(x => x.examSubjectId)))); if (!es.length) continue; } const approved = await this.db.select({ id: seatPlanCandidates.id }).from(seatPlanCandidates).where(and(eq(seatPlanCandidates.seatPlanId, row.id), eq(seatPlanCandidates.status, 'approved'))); const seated = await this.db.select({ id: seatAssignments.id }).from(seatAssignments).where(eq(seatAssignments.seatPlanId, row.id)); result.push({ ...row, approvedCount: approved.length, seatedCount: seated.length, subjectIds: links.map(x => x.examSubjectId) }); }
+    for (const row of rows) {
+      const links = await this.db
+        .select({ examSubjectId: seatPlanSubjects.examSubjectId })
+        .from(seatPlanSubjects)
+        .where(eq(seatPlanSubjects.seatPlanId, row.id));
+      if (filter.examId) {
+        const es = await this.db
+          .select({ id: examSubjects.id })
+          .from(examSubjects)
+          .where(
+            and(
+              eq(examSubjects.examId, filter.examId),
+              inArray(
+                examSubjects.id,
+                links.map((x) => x.examSubjectId),
+              ),
+            ),
+          );
+        if (!es.length) continue;
+      }
+      const approved = await this.db
+        .select({ id: seatPlanCandidates.id })
+        .from(seatPlanCandidates)
+        .where(
+          and(
+            eq(seatPlanCandidates.seatPlanId, row.id),
+            eq(seatPlanCandidates.status, 'approved'),
+          ),
+        );
+      const seated = await this.db
+        .select({ id: seatAssignments.id })
+        .from(seatAssignments)
+        .where(eq(seatAssignments.seatPlanId, row.id));
+      result.push({
+        ...row,
+        approvedCount: approved.length,
+        seatedCount: seated.length,
+        subjectIds: links.map((x) => x.examSubjectId),
+      });
+    }
     return { data: result };
   }
 
   async create(user: AuthUser, value: CreateInput) {
-    if (!value.examSubjectIds?.length || !value.selectedSectionIds?.length) throw new BadRequestException('বিষয় এবং অন্তত একটি শাখা নির্বাচন করুন');
-    const subjectRows = await this.db.select({ config: examSubjects, exam: exams, subject: subjects }).from(examSubjects).innerJoin(exams, eq(exams.id, examSubjects.examId)).innerJoin(subjects, eq(subjects.id, examSubjects.subjectId)).where(and(eq(exams.schoolId, user.schoolId), inArray(examSubjects.id, value.examSubjectIds)));
-    if (subjectRows.length !== value.examSubjectIds.length) throw new BadRequestException('বিষয় নির্বাচনটি এই স্কুলের নয়');
-    const title = value.title?.trim() || `${subjectRows[0]?.exam.nameBn ?? 'পরীক্ষা'} — ${subjectRows[0]?.subject.nameBn ?? 'বিষয়'}`;
-    const [row] = await this.db.insert(seatPlans).values({ schoolId: user.schoolId, title, sittingDate: value.sittingDate, shift: value.shift, feeEventId: value.feeEventId || null, eligibilitySource: value.eligibilitySource, sourceExamId: value.sourceExamId || null, selectedSections: value.selectedSectionIds }).returning();
+    if (!value.examSubjectIds?.length)
+      throw new BadRequestException('অন্তত একটি বিষয় নির্বাচন করুন');
+    const subjectRows = await this.db
+      .select({ config: examSubjects, exam: exams, subject: subjects })
+      .from(examSubjects)
+      .innerJoin(exams, eq(exams.id, examSubjects.examId))
+      .innerJoin(subjects, eq(subjects.id, examSubjects.subjectId))
+      .where(
+        and(
+          eq(exams.schoolId, user.schoolId),
+          inArray(examSubjects.id, value.examSubjectIds),
+        ),
+      );
+    if (subjectRows.length !== value.examSubjectIds.length)
+      throw new BadRequestException('বিষয় নির্বাচনটি এই স্কুলের নয়');
+    const selectedSectionIds = value.selectedSectionIds?.length
+      ? value.selectedSectionIds
+      : (
+          await this.db
+            .select({ id: sections.id })
+            .from(sections)
+            .where(
+              and(
+                eq(sections.schoolId, user.schoolId),
+                inArray(sections.classId, [
+                  ...new Set(subjectRows.map((row) => row.exam.classId)),
+                ]),
+              ),
+            )
+        ).map((row) => row.id);
+    if (!selectedSectionIds.length)
+      throw new BadRequestException('পরীক্ষার শ্রেণির কোনো শাখা পাওয়া যায়নি');
+    const title =
+      value.title?.trim() ||
+      `${subjectRows[0]?.exam.nameBn ?? 'পরীক্ষা'} — ${subjectRows[0]?.subject.nameBn ?? 'বিষয়'}`;
+    const [row] = await this.db
+      .insert(seatPlans)
+      .values({
+        schoolId: user.schoolId,
+        title,
+        sittingDate: value.sittingDate,
+        shift: value.shift,
+        feeEventId: value.feeEventId || null,
+        eligibilitySource: value.eligibilitySource,
+        sourceExamId: value.sourceExamId || null,
+        selectedSections: selectedSectionIds,
+      })
+      .returning();
     if (!row) throw new BadRequestException('সিট প্ল্যান তৈরি করা যায়নি');
-    await this.db.insert(seatPlanSubjects).values(value.examSubjectIds.map(examSubjectId => ({ seatPlanId: row.id, examSubjectId })));
-    const candidates = await this.buildCandidates(user.schoolId, value);
-    if (candidates.length) await this.db.insert(seatPlanCandidates).values(candidates.map(c => ({ seatPlanId: row.id, studentId: c.studentId, examSubjectId: c.examSubjectId, status: c.status, excludeReason: c.excludeReason, isManualAdd: false })));
+    await this.db
+      .insert(seatPlanSubjects)
+      .values(
+        value.examSubjectIds.map((examSubjectId) => ({
+          seatPlanId: row.id,
+          examSubjectId,
+        })),
+      );
+    const candidates = await this.buildCandidates(user.schoolId, {
+      ...value,
+      selectedSectionIds,
+    });
+    if (candidates.length)
+      await this.db
+        .insert(seatPlanCandidates)
+        .values(
+          candidates.map((c) => ({
+            seatPlanId: row.id,
+            studentId: c.studentId,
+            examSubjectId: c.examSubjectId,
+            status: c.status,
+            excludeReason: c.excludeReason,
+            isManualAdd: false,
+          })),
+        );
     return { data: row, counts: this.countCandidates(candidates) };
   }
 
-  private countCandidates(rows: Array<{ status: string; excludeReason?: string | null }>) { return { approved: rows.filter(x => x.status === 'approved').length, excluded: rows.filter(x => x.status === 'excluded').length, byReason: rows.reduce<Record<string, number>>((a, x) => { if (x.status === 'excluded' && x.excludeReason) a[x.excludeReason] = (a[x.excludeReason] ?? 0) + 1; return a; }, {}) }; }
+  private countCandidates(
+    rows: Array<{ status: string; excludeReason?: string | null }>,
+  ) {
+    return {
+      approved: rows.filter((x) => x.status === 'approved').length,
+      excluded: rows.filter((x) => x.status === 'excluded').length,
+      byReason: rows.reduce<Record<string, number>>((a, x) => {
+        if (x.status === 'excluded' && x.excludeReason)
+          a[x.excludeReason] = (a[x.excludeReason] ?? 0) + 1;
+        return a;
+      }, {}),
+    };
+  }
   private async buildCandidates(schoolId: string, value: CreateInput) {
-    const subjectRows = await this.db.select({ examSubjectId: examSubjects.id, subjectId: examSubjects.subjectId, examId: examSubjects.examId, classId: exams.classId }).from(examSubjects).innerJoin(exams, eq(exams.id, examSubjects.examId)).where(inArray(examSubjects.id, value.examSubjectIds));
-    const assignmentRows = await this.db.select({ classId: subjectAssignments.classId, sectionId: subjectAssignments.sectionId, subjectId: subjectAssignments.subjectId }).from(subjectAssignments).where(and(eq(subjectAssignments.schoolId, schoolId), inArray(subjectAssignments.subjectId, subjectRows.map(x => x.subjectId))));
-    const configuredSubjects = new Set(assignmentRows.map(x => `${x.classId}|${x.subjectId}`));
-    const rows = await this.db.select({ student: students, assignmentSubjectId: examSubjects.id }).from(students).leftJoin(examSubjects, inArray(examSubjects.id, value.examSubjectIds)).where(and(eq(students.schoolId, schoolId), eq(students.isActive, true), inArray(students.sectionId, value.selectedSectionIds)));
-    const failed = value.eligibilitySource === 'failed' && value.sourceExamId ? await this.db.select({ studentId: results.studentId, subjectId: examSubjects.subjectId }).from(results).innerJoin(resultSubjects, eq(resultSubjects.resultId, results.id)).innerJoin(examSubjects, eq(examSubjects.id, resultSubjects.examSubjectId)).where(and(eq(results.schoolId, schoolId), eq(results.examId, value.sourceExamId), eq(resultSubjects.letter, 'F'))) : [];
-    const failedSet = new Set(failed.map(x => `${x.studentId}|${x.subjectId}`));
-    const dues = value.feeEventId ? await this.db.select({ studentId: studentFees.studentId, amount: studentFees.amount, paidAmount: studentFees.paidAmount }).from(studentFees).where(and(eq(studentFees.schoolId, schoolId), eq(studentFees.feeEventId, value.feeEventId))) : [];
-    const dueMap = new Map(dues.map(x => [x.studentId, x]));
-    return rows.filter((x, i, a) => a.findIndex(y => y.student.id === x.student.id) === i).map(x => { const subject = subjectRows.find(s => s.classId === x.student.classId); const assigned = subject ? assignmentRows.filter(a => a.classId === subject.classId && a.subjectId === subject.subjectId) : []; const subjectOk = !subject || !configuredSubjects.has(`${subject.classId}|${subject.subjectId}`) || assigned.some(a => !a.sectionId || a.sectionId === x.student.sectionId); const failedOk = value.eligibilitySource === 'all' || Boolean(subject && failedSet.has(`${x.student.id}|${subject.subjectId}`)); const fee = dueMap.get(x.student.id); const feeDue = Boolean(fee && fee.paidAmount < fee.amount); const reason = !subjectOk ? 'no_subject' : !failedOk ? 'not_failed' : feeDue ? 'fee_due' : null; return { studentId: x.student.id, examSubjectId: subject?.examSubjectId ?? null, status: reason ? 'excluded' : 'approved', excludeReason: reason }; });
+    const subjectRows = await this.db
+      .select({
+        examSubjectId: examSubjects.id,
+        subjectId: examSubjects.subjectId,
+        examId: examSubjects.examId,
+        classId: exams.classId,
+      })
+      .from(examSubjects)
+      .innerJoin(exams, eq(exams.id, examSubjects.examId))
+      .where(inArray(examSubjects.id, value.examSubjectIds));
+    const assignmentRows = await this.db
+      .select({
+        classId: subjectAssignments.classId,
+        sectionId: subjectAssignments.sectionId,
+        subjectId: subjectAssignments.subjectId,
+      })
+      .from(subjectAssignments)
+      .where(
+        and(
+          eq(subjectAssignments.schoolId, schoolId),
+          inArray(
+            subjectAssignments.subjectId,
+            subjectRows.map((x) => x.subjectId),
+          ),
+        ),
+      );
+    const configuredSubjects = new Set(
+      assignmentRows.map((x) => `${x.classId}|${x.subjectId}`),
+    );
+    const rows = await this.db
+      .select({ student: students, assignmentSubjectId: examSubjects.id })
+      .from(students)
+      .leftJoin(examSubjects, inArray(examSubjects.id, value.examSubjectIds))
+      .where(
+        and(
+          eq(students.schoolId, schoolId),
+          eq(students.isActive, true),
+          inArray(students.sectionId, value.selectedSectionIds),
+        ),
+      );
+    const failed =
+      value.eligibilitySource === 'failed' && value.sourceExamId
+        ? await this.db
+            .select({
+              studentId: results.studentId,
+              subjectId: examSubjects.subjectId,
+            })
+            .from(results)
+            .innerJoin(resultSubjects, eq(resultSubjects.resultId, results.id))
+            .innerJoin(
+              examSubjects,
+              eq(examSubjects.id, resultSubjects.examSubjectId),
+            )
+            .where(
+              and(
+                eq(results.schoolId, schoolId),
+                eq(results.examId, value.sourceExamId),
+                eq(resultSubjects.letter, 'F'),
+              ),
+            )
+        : [];
+    const failedSet = new Set(
+      failed.map((x) => `${x.studentId}|${x.subjectId}`),
+    );
+    const dues = value.feeEventId
+      ? await this.db
+          .select({
+            studentId: studentFees.studentId,
+            amount: studentFees.amount,
+            paidAmount: studentFees.paidAmount,
+          })
+          .from(studentFees)
+          .where(
+            and(
+              eq(studentFees.schoolId, schoolId),
+              eq(studentFees.feeEventId, value.feeEventId),
+            ),
+          )
+      : [];
+    const dueMap = new Map(dues.map((x) => [x.studentId, x]));
+    return rows
+      .filter(
+        (x, i, a) => a.findIndex((y) => y.student.id === x.student.id) === i,
+      )
+      .map((x) => {
+        const subject = subjectRows.find(
+          (s) => s.classId === x.student.classId,
+        );
+        const assigned = subject
+          ? assignmentRows.filter(
+              (a) =>
+                a.classId === subject.classId &&
+                a.subjectId === subject.subjectId,
+            )
+          : [];
+        const subjectOk =
+          !subject ||
+          !configuredSubjects.has(`${subject.classId}|${subject.subjectId}`) ||
+          assigned.some(
+            (a) => !a.sectionId || a.sectionId === x.student.sectionId,
+          );
+        const failedOk =
+          value.eligibilitySource === 'all' ||
+          Boolean(
+            subject && failedSet.has(`${x.student.id}|${subject.subjectId}`),
+          );
+        const fee = dueMap.get(x.student.id);
+        const feeDue = Boolean(fee && fee.paidAmount < fee.amount);
+        const reason = !subjectOk
+          ? 'no_subject'
+          : !failedOk
+            ? 'not_failed'
+            : feeDue
+              ? 'fee_due'
+              : null;
+        return {
+          studentId: x.student.id,
+          examSubjectId: subject?.examSubjectId ?? null,
+          status: reason ? 'excluded' : 'approved',
+          excludeReason: reason,
+        };
+      });
   }
 
-  async detail(schoolId: string, id: string) { const p = await this.plan(schoolId, id); const subjectsRows = await this.db.select({ link: seatPlanSubjects, subjectNameBn: subjects.nameBn, examNameBn: exams.nameBn, examId: exams.id }).from(seatPlanSubjects).innerJoin(examSubjects, eq(examSubjects.id, seatPlanSubjects.examSubjectId)).innerJoin(subjects, eq(subjects.id, examSubjects.subjectId)).innerJoin(exams, eq(exams.id, examSubjects.examId)).where(eq(seatPlanSubjects.seatPlanId, id)); const roomRows = await this.db.select({ link: seatPlanRooms, room: rooms }).from(seatPlanRooms).innerJoin(rooms, eq(rooms.id, seatPlanRooms.roomId)).where(eq(seatPlanRooms.seatPlanId, id)).orderBy(asc(seatPlanRooms.sortOrder)); const assignments = await this.assignmentRows(schoolId, id); return { data: { ...p, subjects: subjectsRows, rooms: roomRows, assignments } }; }
-  private async assignmentRows(schoolId: string, id: string) { return this.db.select({ assignment: seatAssignments, student: students, name: users.displayNameBn, registrationNumber: users.registrationNumber, classNameBn: academicClasses.nameBn, sectionNameBn: sections.nameBn, groupName: sections.groupName, roomName: rooms.nameBn }).from(seatAssignments).innerJoin(students, eq(students.id, seatAssignments.studentId)).innerJoin(users, eq(users.id, students.userId)).leftJoin(academicClasses, eq(academicClasses.id, students.classId)).leftJoin(sections, eq(sections.id, students.sectionId)).innerJoin(seatPlanRooms, eq(seatPlanRooms.id, seatAssignments.seatPlanRoomId)).innerJoin(rooms, eq(rooms.id, seatPlanRooms.roomId)).where(and(eq(students.schoolId, schoolId), eq(seatAssignments.seatPlanId, id))).orderBy(asc(rooms.nameBn), asc(seatAssignments.seatNo)); }
-  async candidates(schoolId: string, id: string) { await this.plan(schoolId, id); const rows = await this.db.select({ candidate: seatPlanCandidates, student: students, name: users.displayNameBn, registrationNumber: users.registrationNumber, classNameBn: academicClasses.nameBn, sectionNameBn: sections.nameBn, groupName: sections.groupName }).from(seatPlanCandidates).innerJoin(students, eq(students.id, seatPlanCandidates.studentId)).innerJoin(users, eq(users.id, students.userId)).leftJoin(academicClasses, eq(academicClasses.id, students.classId)).leftJoin(sections, eq(sections.id, students.sectionId)).where(eq(seatPlanCandidates.seatPlanId, id)).orderBy(asc(academicClasses.orderIndex), asc(students.roll)); return { data: rows }; }
-  async excluded(schoolId: string, id: string) { const result = await this.candidates(schoolId, id); return { data: result.data.filter(x => x.candidate.status === 'excluded') }; }
+  async detail(schoolId: string, id: string) {
+    const p = await this.plan(schoolId, id);
+    const subjectsRows = await this.db
+      .select({
+        link: seatPlanSubjects,
+        subjectNameBn: subjects.nameBn,
+        examNameBn: exams.nameBn,
+        examId: exams.id,
+      })
+      .from(seatPlanSubjects)
+      .innerJoin(
+        examSubjects,
+        eq(examSubjects.id, seatPlanSubjects.examSubjectId),
+      )
+      .innerJoin(subjects, eq(subjects.id, examSubjects.subjectId))
+      .innerJoin(exams, eq(exams.id, examSubjects.examId))
+      .where(eq(seatPlanSubjects.seatPlanId, id));
+    const roomRows = await this.db
+      .select({ link: seatPlanRooms, room: rooms })
+      .from(seatPlanRooms)
+      .innerJoin(rooms, eq(rooms.id, seatPlanRooms.roomId))
+      .where(eq(seatPlanRooms.seatPlanId, id))
+      .orderBy(asc(seatPlanRooms.sortOrder));
+    const assignments = await this.assignmentRows(schoolId, id);
+    return {
+      data: { ...p, subjects: subjectsRows, rooms: roomRows, assignments },
+    };
+  }
+  async updateSelection(
+    user: AuthUser,
+    id: string,
+    selectedSectionIds: string[],
+  ) {
+    const p = await this.plan(user.schoolId, id);
+    if (p.status !== 'draft')
+      throw new BadRequestException(
+        'লক বা প্রকাশিত প্ল্যানে ক্লাস/গ্রুপ পরিবর্তন করা যাবে না',
+      );
+    if (!Array.isArray(selectedSectionIds) || !selectedSectionIds.length)
+      throw new BadRequestException('অন্তত একটি শাখা নির্বাচন করুন');
+    const valid = await this.db
+      .select({ id: sections.id })
+      .from(sections)
+      .where(
+        and(
+          eq(sections.schoolId, user.schoolId),
+          inArray(sections.id, selectedSectionIds),
+        ),
+      );
+    if (valid.length !== selectedSectionIds.length)
+      throw new BadRequestException('নির্বাচিত শাখা এই স্কুলের নয়');
+    const linked = await this.db
+      .select({ examSubjectId: seatPlanSubjects.examSubjectId })
+      .from(seatPlanSubjects)
+      .where(eq(seatPlanSubjects.seatPlanId, id));
+    const previous = await this.db
+      .select({ candidate: seatPlanCandidates })
+      .from(seatPlanCandidates)
+      .where(eq(seatPlanCandidates.seatPlanId, id));
+    const next = await this.buildCandidates(user.schoolId, {
+      sittingDate: p.sittingDate,
+      shift: p.shift,
+      examSubjectIds: linked.map((row) => row.examSubjectId),
+      selectedSectionIds,
+      eligibilitySource: p.eligibilitySource as 'all' | 'failed',
+      sourceExamId: p.sourceExamId ?? undefined,
+      feeEventId: p.feeEventId ?? undefined,
+    });
+    const old = new Map(
+      previous.map((row) => [row.candidate.studentId, row.candidate]),
+    );
+    await this.db
+      .delete(seatAssignments)
+      .where(eq(seatAssignments.seatPlanId, id));
+    await this.db
+      .delete(seatPlanCandidates)
+      .where(eq(seatPlanCandidates.seatPlanId, id));
+    if (next.length)
+      await this.db.insert(seatPlanCandidates).values(
+        next.map((candidate) => {
+          const prior = old.get(candidate.studentId);
+          return {
+            seatPlanId: id,
+            studentId: candidate.studentId,
+            examSubjectId: candidate.examSubjectId,
+            status: prior?.status ?? candidate.status,
+            excludeReason:
+              prior?.status === 'excluded'
+                ? prior.excludeReason
+                : candidate.excludeReason,
+            isManualAdd: prior?.isManualAdd ?? false,
+          };
+        }),
+      );
+    await this.db
+      .update(seatPlans)
+      .set({ selectedSections: selectedSectionIds, updatedAt: new Date() })
+      .where(eq(seatPlans.id, id));
+    return this.candidates(user.schoolId, id);
+  }
+  private async assignmentRows(schoolId: string, id: string) {
+    return this.db
+      .select({
+        assignment: seatAssignments,
+        student: students,
+        name: users.displayNameBn,
+        registrationNumber: users.registrationNumber,
+        classNameBn: academicClasses.nameBn,
+        sectionNameBn: sections.nameBn,
+        groupName: sections.groupName,
+        roomName: rooms.nameBn,
+      })
+      .from(seatAssignments)
+      .innerJoin(students, eq(students.id, seatAssignments.studentId))
+      .innerJoin(users, eq(users.id, students.userId))
+      .leftJoin(academicClasses, eq(academicClasses.id, students.classId))
+      .leftJoin(sections, eq(sections.id, students.sectionId))
+      .innerJoin(
+        seatPlanRooms,
+        eq(seatPlanRooms.id, seatAssignments.seatPlanRoomId),
+      )
+      .innerJoin(rooms, eq(rooms.id, seatPlanRooms.roomId))
+      .where(
+        and(
+          eq(students.schoolId, schoolId),
+          eq(seatAssignments.seatPlanId, id),
+        ),
+      )
+      .orderBy(asc(rooms.nameBn), asc(seatAssignments.seatNo));
+  }
+  async candidates(schoolId: string, id: string) {
+    await this.plan(schoolId, id);
+    const rows = await this.db
+      .select({
+        candidate: seatPlanCandidates,
+        student: students,
+        name: users.displayNameBn,
+        registrationNumber: users.registrationNumber,
+        classNameBn: academicClasses.nameBn,
+        sectionNameBn: sections.nameBn,
+        groupName: sections.groupName,
+      })
+      .from(seatPlanCandidates)
+      .innerJoin(students, eq(students.id, seatPlanCandidates.studentId))
+      .innerJoin(users, eq(users.id, students.userId))
+      .leftJoin(academicClasses, eq(academicClasses.id, students.classId))
+      .leftJoin(sections, eq(sections.id, students.sectionId))
+      .where(eq(seatPlanCandidates.seatPlanId, id))
+      .orderBy(asc(academicClasses.orderIndex), asc(students.roll));
+    return { data: rows };
+  }
+  async excluded(schoolId: string, id: string) {
+    const result = await this.candidates(schoolId, id);
+    return {
+      data: result.data.filter((x) => x.candidate.status === 'excluded'),
+    };
+  }
   async printData(schoolId: string, id: string) {
     const detail = await this.detail(schoolId, id);
-    const [school] = await this.db.select({ nameBn: schools.nameBn }).from(schools).where(eq(schools.id, schoolId)).limit(1);
-    return { data: { ...detail.data, schoolNameBn: school?.nameBn ?? 'বিদ্যালয়' } };
+    const [school] = await this.db
+      .select({ nameBn: schools.nameBn })
+      .from(schools)
+      .where(eq(schools.id, schoolId))
+      .limit(1);
+    return {
+      data: { ...detail.data, schoolNameBn: school?.nameBn ?? 'বিদ্যালয়' },
+    };
   }
-  async editCandidates(user: AuthUser, id: string, value: { includeStudentIds?: string[]; excludeStudentIds?: string[]; studentIds?: string[]; status?: 'approved' | 'excluded'; updates?: Array<{ studentId: string; status: 'approved' | 'excluded' }> }) { const p = await this.plan(user.schoolId, id); if (p.status === 'published') throw new BadRequestException('প্রকাশিত প্ল্যানে পরিবর্তন করা যাবে না'); const hasLegacy = Array.isArray(value.includeStudentIds) || Array.isArray(value.excludeStudentIds); const hasSimple = Array.isArray(value.studentIds) && Boolean(value.status); const hasUpdates = Array.isArray(value.updates); if (!hasLegacy && !hasSimple && !hasUpdates) throw new BadRequestException('প্রার্থীদের আপডেটের জন্য studentIds/status অথবা updates দিতে হবে'); const updates = hasUpdates ? value.updates! : hasSimple ? value.studentIds!.map((studentId) => ({ studentId, status: value.status! })) : [...(value.includeStudentIds ?? []).map((studentId) => ({ studentId, status: 'approved' as const })), ...(value.excludeStudentIds ?? []).map((studentId) => ({ studentId, status: 'excluded' as const }))]; if (updates.some((u) => !u.studentId || (u.status !== 'approved' && u.status !== 'excluded'))) throw new BadRequestException('প্রার্থীর status approved অথবা excluded হতে হবে'); for (const u of updates) await this.db.update(seatPlanCandidates).set({ status: u.status, excludeReason: u.status === 'excluded' ? 'manual' : null, updatedAt: new Date() }).where(and(eq(seatPlanCandidates.seatPlanId, id), eq(seatPlanCandidates.studentId, u.studentId))); return this.candidates(user.schoolId, id); }
-  async addCandidate(user: AuthUser, id: string, registrationNumber: string) { const p = await this.plan(user.schoolId, id); if (p.status === 'published') throw new BadRequestException('প্রকাশিত প্ল্যানে যোগ করা যাবে না'); const [student] = await this.db.select({ id: students.id }).from(students).innerJoin(users, eq(users.id, students.userId)).where(and(eq(students.schoolId, user.schoolId), eq(users.registrationNumber, registrationNumber.trim()))).limit(1); if (!student) throw new NotFoundException('রেজিস্ট্রেশন নম্বরে শিক্ষার্থী পাওয়া যায়নি'); await this.db.insert(seatPlanCandidates).values({ seatPlanId: id, studentId: student.id, status: 'approved', isManualAdd: true }).onConflictDoUpdate({ target: [seatPlanCandidates.seatPlanId, seatPlanCandidates.studentId], set: { status: 'approved', excludeReason: null, isManualAdd: true, updatedAt: new Date() } }); return { data: { studentId: student.id } }; }
+  async editCandidates(
+    user: AuthUser,
+    id: string,
+    value: {
+      includeStudentIds?: string[];
+      excludeStudentIds?: string[];
+      studentIds?: string[];
+      status?: 'approved' | 'excluded';
+      updates?: Array<{ studentId: string; status: 'approved' | 'excluded' }>;
+    },
+  ) {
+    const p = await this.plan(user.schoolId, id);
+    if (p.status === 'published')
+      throw new BadRequestException('প্রকাশিত প্ল্যানে পরিবর্তন করা যাবে না');
+    const hasLegacy =
+      Array.isArray(value.includeStudentIds) ||
+      Array.isArray(value.excludeStudentIds);
+    const hasSimple = Array.isArray(value.studentIds) && Boolean(value.status);
+    const hasUpdates = Array.isArray(value.updates);
+    if (!hasLegacy && !hasSimple && !hasUpdates)
+      throw new BadRequestException(
+        'প্রার্থীদের আপডেটের জন্য studentIds/status অথবা updates দিতে হবে',
+      );
+    const updates = hasUpdates
+      ? value.updates!
+      : hasSimple
+        ? value.studentIds!.map((studentId) => ({
+            studentId,
+            status: value.status!,
+          }))
+        : [
+            ...(value.includeStudentIds ?? []).map((studentId) => ({
+              studentId,
+              status: 'approved' as const,
+            })),
+            ...(value.excludeStudentIds ?? []).map((studentId) => ({
+              studentId,
+              status: 'excluded' as const,
+            })),
+          ];
+    if (
+      updates.some(
+        (u) =>
+          !u.studentId || (u.status !== 'approved' && u.status !== 'excluded'),
+      )
+    )
+      throw new BadRequestException(
+        'প্রার্থীর status approved অথবা excluded হতে হবে',
+      );
+    for (const u of updates)
+      await this.db
+        .update(seatPlanCandidates)
+        .set({
+          status: u.status,
+          excludeReason: u.status === 'excluded' ? 'manual' : null,
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(seatPlanCandidates.seatPlanId, id),
+            eq(seatPlanCandidates.studentId, u.studentId),
+          ),
+        );
+    return this.candidates(user.schoolId, id);
+  }
+  async addCandidate(user: AuthUser, id: string, registrationNumber: string) {
+    const p = await this.plan(user.schoolId, id);
+    if (p.status === 'published')
+      throw new BadRequestException('প্রকাশিত প্ল্যানে যোগ করা যাবে না');
+    const [student] = await this.db
+      .select({ id: students.id })
+      .from(students)
+      .innerJoin(users, eq(users.id, students.userId))
+      .where(
+        and(
+          eq(students.schoolId, user.schoolId),
+          eq(users.registrationNumber, registrationNumber.trim()),
+        ),
+      )
+      .limit(1);
+    if (!student)
+      throw new NotFoundException(
+        'রেজিস্ট্রেশন নম্বরে শিক্ষার্থী পাওয়া যায়নি',
+      );
+    await this.db
+      .insert(seatPlanCandidates)
+      .values({
+        seatPlanId: id,
+        studentId: student.id,
+        status: 'approved',
+        isManualAdd: true,
+      })
+      .onConflictDoUpdate({
+        target: [seatPlanCandidates.seatPlanId, seatPlanCandidates.studentId],
+        set: {
+          status: 'approved',
+          excludeReason: null,
+          isManualAdd: true,
+          updatedAt: new Date(),
+        },
+      });
+    return { data: { studentId: student.id } };
+  }
 
-  private async roomRows(user: AuthUser, input: GenerateInput) { const rows = await this.db.select().from(rooms).where(and(eq(rooms.schoolId, user.schoolId), eq(rooms.isActive, true), inArray(rooms.id, input.roomIds))); if (rows.length !== input.roomIds.length) throw new BadRequestException('নির্বাচিত রুম পাওয়া যায়নি'); return input.roomIds.map(id => rows.find(r => r.id === id)!); }
-  async generate(user: AuthUser, id: string, input: GenerateInput) { const p = await this.plan(user.schoolId, id); if (p.status !== 'draft') throw new BadRequestException('শুধু খসড়া প্ল্যানে জেনারেট করা যায়'); if (!input.roomIds?.length) throw new BadRequestException('অন্তত একটি রুম নির্বাচন করুন'); if (![1, 2, 3].includes(input.perBench)) throw new BadRequestException('প্রতি বেঞ্চে ১, ২ অথবা ৩ জন নির্বাচন করুন'); const roomsRows = await this.roomRows(user, input); const existingPlans = await this.db.select({ id: seatPlans.id }).from(seatPlans).innerJoin(seatPlanRooms, eq(seatPlanRooms.seatPlanId, seatPlans.id)).where(and(eq(seatPlans.schoolId, user.schoolId), eq(seatPlans.sittingDate, p.sittingDate), eq(seatPlans.shift, p.shift), ne(seatPlans.id, p.id), inArray(seatPlanRooms.roomId, input.roomIds))); if (existingPlans.length) throw new BadRequestException('এই তারিখ ও শিফটে নির্বাচিত কোনো রুম অন্য সিটিংয়ে ব্যবহৃত হচ্ছে'); const approved = await this.db.select({ studentId: seatPlanCandidates.studentId }).from(seatPlanCandidates).where(and(eq(seatPlanCandidates.seatPlanId, id), eq(seatPlanCandidates.status, 'approved'))); const details = await this.candidateDetails(user.schoolId, id, approved.map(x => x.studentId)); const cap = roomsRows.reduce((n, r) => n + layoutCapacity(r.layout as RoomLayoutRow[], input.perBench), 0); if (details.length > cap) throw new BadRequestException('অনুমোদিত শিক্ষার্থী ' + details.length + ' জন, মোট আসন ' + cap + 'টি — আরও রুম যোগ করুন'); const mode = input.pattern === 'class_roll' ? 'class_roll' : 'roll_mix'; const selected = Array.isArray(p.selectedSections) ? p.selectedSections as string[] : []; const classOrder = [...new Set(selected.map((sectionId) => details.find((row) => row.sectionId === sectionId)?.classId).filter((x): x is string => Boolean(x)))]; let queue = input.pattern === 'reg_serial' ? orderByRegistration(details) : orderByRoll(details, mode, classOrder); if (input.roomMode === 'separate_by_group') { const groups = [...new Set(queue.map((row) => row.groupName ?? ''))]; queue = groups.flatMap((group) => input.pattern === 'reg_serial' ? orderByRegistration(queue.filter((row) => (row.groupName ?? '') === group)) : orderByRoll(queue.filter((row) => (row.groupName ?? '') === group), mode, classOrder)); } await this.db.delete(seatAssignments).where(eq(seatAssignments.seatPlanId, id)); await this.db.delete(seatPlanRooms).where(eq(seatPlanRooms.seatPlanId, id)); const links = await this.db.insert(seatPlanRooms).values(roomsRows.map((r, i) => ({ seatPlanId: id, roomId: r.id, sortOrder: i, roomTeacherName: input.roomTeacherNames?.[r.id] || null }))).returning(); let index = 0; const assignments: Array<{ seatPlanId: string; seatPlanRoomId: string; studentId: string; seatNo: number; benchRow: number; benchColumn: number; benchSlot: number; benchPosition: 'left' | 'middle' | 'right' | null }> = []; for (const link of links) { const room = roomsRows.find((r) => r.id === link.roomId)!; const positions = seatPositions(room.layout as RoomLayoutRow[], input.perBench); let seatNo = 0; for (const pos of positions) { const item = queue[index++]; if (!item) break; seatNo += 1; assignments.push({ seatPlanId: id, seatPlanRoomId: link.id, studentId: item.studentId, seatNo, ...pos }); } } if (assignments.length) await this.db.insert(seatAssignments).values(assignments); await this.db.update(seatPlans).set({ roomMode: input.roomMode, pattern: input.pattern === 'reg_serial' ? 'reg_serial' : mode, perBench: input.perBench, updatedAt: new Date() }).where(eq(seatPlans.id, id)); return { data: { planId: id, assigned: assignments.length, capacity: cap } }; }
-  private async candidateDetails(schoolId: string, planId: string, ids: string[]): Promise<Candidate[]> { if (!ids.length) return []; return this.db.select({ studentId: students.id, classId: students.classId, sectionId: students.sectionId, roll: students.roll, name: users.displayNameBn, registrationNumber: users.registrationNumber, classNameBn: academicClasses.nameBn, sectionNameBn: sections.nameBn, groupName: sections.groupName, examSubjectId: seatPlanCandidates.examSubjectId }).from(students).innerJoin(users, eq(users.id, students.userId)).leftJoin(academicClasses, eq(academicClasses.id, students.classId)).leftJoin(sections, eq(sections.id, students.sectionId)).innerJoin(seatPlanCandidates, and(eq(seatPlanCandidates.studentId, students.id), eq(seatPlanCandidates.seatPlanId, planId))).where(and(eq(students.schoolId, schoolId), inArray(students.id, ids))).orderBy(asc(students.classId), asc(students.sectionId), asc(students.roll)); }
-  private positions(room: typeof rooms.$inferSelect, perBench: number, _legacyPattern?: GenerateInput['pattern']) { return seatPositions(room.layout as RoomLayoutRow[], perBench as 1 | 2 | 3); }
-  async editAssignments(user: AuthUser, id: string, value: { assignmentId: string; seatPlanRoomId: string; seatNo: number; benchRow: number; benchColumn: number; benchSlot: number; benchPosition?: string | null } | { firstAssignmentId: string; secondAssignmentId: string }) { const p = await this.plan(user.schoolId, id); if (p.status !== 'draft') throw new BadRequestException('লক বা প্রকাশিত প্ল্যানে আসন বদলানো যাবে না'); if ('firstAssignmentId' in value) { const rows = await this.db.select().from(seatAssignments).where(and(eq(seatAssignments.seatPlanId, id), inArray(seatAssignments.id, [value.firstAssignmentId, value.secondAssignmentId]))); if (rows.length !== 2) throw new NotFoundException('অ্যাসাইনমেন্ট পাওয়া যায়নি'); await this.db.update(seatAssignments).set({ seatPlanRoomId: rows[1]!.seatPlanRoomId, seatNo: rows[1]!.seatNo, benchRow: rows[1]!.benchRow, benchColumn: rows[1]!.benchColumn, benchSlot: rows[1]!.benchSlot, benchPosition: rows[1]!.benchPosition, updatedAt: new Date() }).where(eq(seatAssignments.id, rows[0]!.id)); await this.db.update(seatAssignments).set({ seatPlanRoomId: rows[0]!.seatPlanRoomId, seatNo: rows[0]!.seatNo, benchRow: rows[0]!.benchRow, benchColumn: rows[0]!.benchColumn, benchSlot: rows[0]!.benchSlot, benchPosition: rows[0]!.benchPosition, updatedAt: new Date() }).where(eq(seatAssignments.id, rows[1]!.id)); } else await this.db.update(seatAssignments).set({ seatPlanRoomId: value.seatPlanRoomId, seatNo: value.seatNo, benchRow: value.benchRow, benchColumn: value.benchColumn, benchSlot: value.benchSlot, benchPosition: value.benchPosition ?? null, updatedAt: new Date() }).where(and(eq(seatAssignments.id, value.assignmentId), eq(seatAssignments.seatPlanId, id))); return this.detail(user.schoolId, id); }
-  async append(user: AuthUser, id: string) { const p = await this.plan(user.schoolId, id); if (p.status !== 'locked') throw new BadRequestException('শুধু লক করা প্ল্যানে যোগ করা যাবে'); const links = await this.db.select().from(seatPlanRooms).where(eq(seatPlanRooms.seatPlanId, id)).orderBy(asc(seatPlanRooms.sortOrder)); const used = await this.db.select({ roomId: seatAssignments.seatPlanRoomId, seatNo: seatAssignments.seatNo }).from(seatAssignments).where(eq(seatAssignments.seatPlanId, id)); const candidates = await this.db.select({ studentId: seatPlanCandidates.studentId }).from(seatPlanCandidates).leftJoin(seatAssignments, and(eq(seatAssignments.studentId, seatPlanCandidates.studentId), eq(seatAssignments.seatPlanId, id))).where(and(eq(seatPlanCandidates.seatPlanId, id), eq(seatPlanCandidates.status, 'approved'))); const seated = new Set(used.map(x => `${x.roomId}|${x.seatNo}`)); const assignedStudents = new Set((await this.db.select({ studentId: seatAssignments.studentId }).from(seatAssignments).where(eq(seatAssignments.seatPlanId, id))).map(x => x.studentId)); const out = []; let n = 0; for (const link of links) { const room = (await this.db.select().from(rooms).where(eq(rooms.id, link.roomId)).limit(1))[0]!; for (const pos of this.positions(room, p.perBench, p.pattern as GenerateInput['pattern'])) { const seatNo = ++n; if (seated.has(`${link.id}|${seatNo}`)) continue; const student = candidates.find(c => !assignedStudents.has(c.studentId)); if (!student) break; out.push({ seatPlanId: id, seatPlanRoomId: link.id, studentId: student.studentId, seatNo, ...pos }); assignedStudents.add(student.studentId); } } if (out.length) await this.db.insert(seatAssignments).values(out); return { data: { placed: out.length, skipped: candidates.length - assignedStudents.size } }; }
-  async changeStatus(user: AuthUser, id: string, status: 'locked' | 'published') { const p = await this.plan(user.schoolId, id); if (status === 'locked' && p.status !== 'draft') throw new BadRequestException('শুধু খসড়া প্ল্যান লক করা যাবে'); if (status === 'published' && p.status !== 'locked') throw new BadRequestException('আগে প্ল্যান লক করুন'); const assigned = await this.db.select({ id: seatAssignments.id }).from(seatAssignments).where(eq(seatAssignments.seatPlanId, id)); const approved = await this.db.select({ id: seatPlanCandidates.id }).from(seatPlanCandidates).where(and(eq(seatPlanCandidates.seatPlanId, id), eq(seatPlanCandidates.status, 'approved'))); if (assigned.length !== approved.length) throw new BadRequestException('সব অনুমোদিত শিক্ষার্থীকে আসন না দিয়ে প্রকাশ করা যাবে না'); const [row] = await this.db.update(seatPlans).set({ status, updatedAt: new Date() }).where(eq(seatPlans.id, id)).returning(); return { data: row }; }
-  async copy(user: AuthUser, id: string, targets: string[]) { const p = await this.plan(user.schoolId, id); const result = []; for (const target of targets) { const [es] = await this.db.select({ examSubject: examSubjects, exam: exams, subject: subjects }).from(examSubjects).innerJoin(exams, eq(exams.id, examSubjects.examId)).innerJoin(subjects, eq(subjects.id, examSubjects.subjectId)).where(and(eq(examSubjects.id, target), eq(exams.schoolId, user.schoolId))).limit(1); if (!es) continue; const created = await this.create(user, { sittingDate: p.sittingDate, shift: p.shift, title: `${es.exam.nameBn} — ${es.subject.nameBn}`, examSubjectIds: [target], selectedSectionIds: (p.selectedSections as string[]), eligibilitySource: p.eligibilitySource as 'all' | 'failed', sourceExamId: p.sourceExamId ?? undefined, feeEventId: p.feeEventId ?? undefined }); result.push({ examSubjectId: target, planId: created.data.id, skipped: 0 }); } return { data: result }; }
-  async studentPlans(user: AuthUser) { const own = await resolveOwnStudent(this.db, user); if (!own) return { data: [] }; const rows = await this.db.select({ plan: seatPlans, assignment: seatAssignments, candidate: seatPlanCandidates, subjectNameBn: subjects.nameBn, examNameBn: exams.nameBn, roomName: rooms.nameBn, building: rooms.building, floor: rooms.floor, layout: rooms.layout }).from(seatAssignments).innerJoin(seatPlans, and(eq(seatPlans.id, seatAssignments.seatPlanId), eq(seatPlans.status, 'published'))).innerJoin(seatPlanRooms, eq(seatPlanRooms.id, seatAssignments.seatPlanRoomId)).innerJoin(rooms, eq(rooms.id, seatPlanRooms.roomId)).innerJoin(seatPlanCandidates, and(eq(seatPlanCandidates.seatPlanId, seatPlans.id), eq(seatPlanCandidates.studentId, own.student.id))).leftJoin(examSubjects, eq(examSubjects.id, seatPlanCandidates.examSubjectId)).leftJoin(subjects, eq(subjects.id, examSubjects.subjectId)).leftJoin(exams, eq(exams.id, examSubjects.examId)).where(and(eq(seatAssignments.studentId, own.student.id), eq(seatPlans.schoolId, own.schoolId))).orderBy(asc(seatPlans.sittingDate)); return { data: rows.map(r => ({ id: r.plan.id, roll: own.student.roll, subjectNameBn: r.subjectNameBn, examNameBn: r.examNameBn ?? r.plan.title, sittingDate: r.plan.sittingDate, shift: r.plan.shift, roomName: r.roomName, building: r.building, floor: r.floor, seatNo: r.assignment.seatNo, benchRow: r.assignment.benchRow, benchColumn: r.assignment.benchColumn, benchSlot: r.assignment.benchSlot, benchPosition: r.assignment.benchPosition, layout: r.layout })) }; }
-  async sendSms(user: AuthUser, id: string) { const p = await this.plan(user.schoolId, id); if (p.status !== 'published') throw new BadRequestException('শুধু প্রকাশিত প্ল্যানে SMS পাঠানো যাবে'); const rows = await this.assignmentRows(user.schoolId, id); const subject = (await this.db.select({ name: subjects.nameBn, exam: exams.nameBn }).from(seatPlanSubjects).innerJoin(examSubjects, eq(examSubjects.id, seatPlanSubjects.examSubjectId)).innerJoin(subjects, eq(subjects.id, examSubjects.subjectId)).innerJoin(exams, eq(exams.id, examSubjects.examId)).where(eq(seatPlanSubjects.seatPlanId, id)).limit(1))[0]; const recipients = rows.map(r => ({ recipient: { name: r.name, mobile: normalizeBdMobile(r.student.guardianMobile) ?? '', studentId: r.assignment.studentId }, message: `${subject?.exam ?? 'পরীক্ষা'} — ${subject?.name ?? 'বিষয়'} (${p.sittingDate}): রুম ${r.roomName}, সিট ${r.assignment.seatNo}` })).filter(x => x.recipient.mobile); return this.sms.sendSeatPlan(user, recipients); }
+  private async roomRows(user: AuthUser, input: GenerateInput) {
+    const rows = await this.db
+      .select()
+      .from(rooms)
+      .where(
+        and(
+          eq(rooms.schoolId, user.schoolId),
+          eq(rooms.isActive, true),
+          inArray(rooms.id, input.roomIds),
+        ),
+      );
+    if (rows.length !== input.roomIds.length)
+      throw new BadRequestException('নির্বাচিত রুম পাওয়া যায়নি');
+    return input.roomIds.map((id) => rows.find((r) => r.id === id)!);
+  }
+  async generate(user: AuthUser, id: string, input: GenerateInput) {
+    const p = await this.plan(user.schoolId, id);
+    if (p.status !== 'draft')
+      throw new BadRequestException('শুধু খসড়া প্ল্যানে জেনারেট করা যায়');
+    if (!input.roomIds?.length)
+      throw new BadRequestException('অন্তত একটি রুম নির্বাচন করুন');
+    if (![1, 2, 3].includes(input.perBench))
+      throw new BadRequestException(
+        'প্রতি বেঞ্চে ১, ২ অথবা ৩ জন নির্বাচন করুন',
+      );
+    const roomsRows = await this.roomRows(user, input);
+    const existingPlans = await this.db
+      .select({ id: seatPlans.id })
+      .from(seatPlans)
+      .innerJoin(seatPlanRooms, eq(seatPlanRooms.seatPlanId, seatPlans.id))
+      .where(
+        and(
+          eq(seatPlans.schoolId, user.schoolId),
+          eq(seatPlans.sittingDate, p.sittingDate),
+          eq(seatPlans.shift, p.shift),
+          ne(seatPlans.id, p.id),
+          inArray(seatPlanRooms.roomId, input.roomIds),
+        ),
+      );
+    if (existingPlans.length)
+      throw new BadRequestException(
+        'এই তারিখ ও শিফটে নির্বাচিত কোনো রুম অন্য সিটিংয়ে ব্যবহৃত হচ্ছে',
+      );
+    const approved = await this.db
+      .select({ studentId: seatPlanCandidates.studentId })
+      .from(seatPlanCandidates)
+      .where(
+        and(
+          eq(seatPlanCandidates.seatPlanId, id),
+          eq(seatPlanCandidates.status, 'approved'),
+        ),
+      );
+    const details = await this.candidateDetails(
+      user.schoolId,
+      id,
+      approved.map((x) => x.studentId),
+    );
+    const cap = roomsRows.reduce(
+      (n, r) => n + layoutCapacity(r.layout as RoomLayoutRow[], input.perBench),
+      0,
+    );
+    if (details.length > cap)
+      throw new BadRequestException(
+        'অনুমোদিত শিক্ষার্থী ' +
+          details.length +
+          ' জন, মোট আসন ' +
+          cap +
+          'টি — আরও রুম যোগ করুন',
+      );
+    const mode = input.pattern === 'class_roll' ? 'class_roll' : 'roll_mix';
+    const selected = Array.isArray(p.selectedSections)
+      ? (p.selectedSections as string[])
+      : [];
+    const classOrder = [
+      ...new Set(
+        selected
+          .map(
+            (sectionId) =>
+              details.find((row) => row.sectionId === sectionId)?.classId,
+          )
+          .filter((x): x is string => Boolean(x)),
+      ),
+    ];
+    let queue =
+      input.pattern === 'reg_serial'
+        ? orderByRegistration(details)
+        : orderByRoll(details, mode, classOrder);
+    if (input.roomMode === 'separate_by_group') {
+      const groups = [...new Set(queue.map((row) => row.groupName ?? ''))];
+      queue = groups.flatMap((group) =>
+        input.pattern === 'reg_serial'
+          ? orderByRegistration(
+              queue.filter((row) => (row.groupName ?? '') === group),
+            )
+          : orderByRoll(
+              queue.filter((row) => (row.groupName ?? '') === group),
+              mode,
+              classOrder,
+            ),
+      );
+    }
+    await this.db
+      .delete(seatAssignments)
+      .where(eq(seatAssignments.seatPlanId, id));
+    await this.db.delete(seatPlanRooms).where(eq(seatPlanRooms.seatPlanId, id));
+    const links = await this.db
+      .insert(seatPlanRooms)
+      .values(
+        roomsRows.map((r, i) => ({
+          seatPlanId: id,
+          roomId: r.id,
+          sortOrder: i,
+          roomTeacherName: input.roomTeacherNames?.[r.id] || null,
+        })),
+      )
+      .returning();
+    let index = 0;
+    const assignments: Array<{
+      seatPlanId: string;
+      seatPlanRoomId: string;
+      studentId: string;
+      seatNo: number;
+      benchRow: number;
+      benchColumn: number;
+      benchSlot: number;
+      benchPosition: 'left' | 'middle' | 'right' | null;
+    }> = [];
+    for (const link of links) {
+      const room = roomsRows.find((r) => r.id === link.roomId)!;
+      const positions = seatPositions(
+        room.layout as RoomLayoutRow[],
+        input.perBench,
+      );
+      let seatNo = 0;
+      for (const pos of positions) {
+        const item = queue[index++];
+        if (!item) break;
+        seatNo += 1;
+        assignments.push({
+          seatPlanId: id,
+          seatPlanRoomId: link.id,
+          studentId: item.studentId,
+          seatNo,
+          ...pos,
+        });
+      }
+    }
+    if (assignments.length)
+      await this.db.insert(seatAssignments).values(assignments);
+    await this.db
+      .update(seatPlans)
+      .set({
+        roomMode: input.roomMode,
+        pattern: input.pattern === 'reg_serial' ? 'reg_serial' : mode,
+        perBench: input.perBench,
+        updatedAt: new Date(),
+      })
+      .where(eq(seatPlans.id, id));
+    return {
+      data: { planId: id, assigned: assignments.length, capacity: cap },
+    };
+  }
+  private async candidateDetails(
+    schoolId: string,
+    planId: string,
+    ids: string[],
+  ): Promise<Candidate[]> {
+    if (!ids.length) return [];
+    return this.db
+      .select({
+        studentId: students.id,
+        classId: students.classId,
+        sectionId: students.sectionId,
+        roll: students.roll,
+        name: users.displayNameBn,
+        registrationNumber: users.registrationNumber,
+        classNameBn: academicClasses.nameBn,
+        sectionNameBn: sections.nameBn,
+        groupName: sections.groupName,
+        examSubjectId: seatPlanCandidates.examSubjectId,
+      })
+      .from(students)
+      .innerJoin(users, eq(users.id, students.userId))
+      .leftJoin(academicClasses, eq(academicClasses.id, students.classId))
+      .leftJoin(sections, eq(sections.id, students.sectionId))
+      .innerJoin(
+        seatPlanCandidates,
+        and(
+          eq(seatPlanCandidates.studentId, students.id),
+          eq(seatPlanCandidates.seatPlanId, planId),
+        ),
+      )
+      .where(and(eq(students.schoolId, schoolId), inArray(students.id, ids)))
+      .orderBy(
+        asc(students.classId),
+        asc(students.sectionId),
+        asc(students.roll),
+      );
+  }
+  private positions(
+    room: typeof rooms.$inferSelect,
+    perBench: number,
+    _legacyPattern?: GenerateInput['pattern'],
+  ) {
+    return seatPositions(room.layout as RoomLayoutRow[], perBench as 1 | 2 | 3);
+  }
+  async editAssignments(
+    user: AuthUser,
+    id: string,
+    value:
+      | {
+          assignmentId: string;
+          seatPlanRoomId: string;
+          seatNo: number;
+          benchRow: number;
+          benchColumn: number;
+          benchSlot: number;
+          benchPosition?: string | null;
+        }
+      | { firstAssignmentId: string; secondAssignmentId: string },
+  ) {
+    const p = await this.plan(user.schoolId, id);
+    if (p.status !== 'draft')
+      throw new BadRequestException(
+        'লক বা প্রকাশিত প্ল্যানে আসন বদলানো যাবে না',
+      );
+    if ('firstAssignmentId' in value) {
+      const rows = await this.db
+        .select()
+        .from(seatAssignments)
+        .where(
+          and(
+            eq(seatAssignments.seatPlanId, id),
+            inArray(seatAssignments.id, [
+              value.firstAssignmentId,
+              value.secondAssignmentId,
+            ]),
+          ),
+        );
+      if (rows.length !== 2)
+        throw new NotFoundException('অ্যাসাইনমেন্ট পাওয়া যায়নি');
+      await this.db
+        .update(seatAssignments)
+        .set({
+          seatPlanRoomId: rows[1]!.seatPlanRoomId,
+          seatNo: rows[1]!.seatNo,
+          benchRow: rows[1]!.benchRow,
+          benchColumn: rows[1]!.benchColumn,
+          benchSlot: rows[1]!.benchSlot,
+          benchPosition: rows[1]!.benchPosition,
+          updatedAt: new Date(),
+        })
+        .where(eq(seatAssignments.id, rows[0]!.id));
+      await this.db
+        .update(seatAssignments)
+        .set({
+          seatPlanRoomId: rows[0]!.seatPlanRoomId,
+          seatNo: rows[0]!.seatNo,
+          benchRow: rows[0]!.benchRow,
+          benchColumn: rows[0]!.benchColumn,
+          benchSlot: rows[0]!.benchSlot,
+          benchPosition: rows[0]!.benchPosition,
+          updatedAt: new Date(),
+        })
+        .where(eq(seatAssignments.id, rows[1]!.id));
+    } else
+      await this.db
+        .update(seatAssignments)
+        .set({
+          seatPlanRoomId: value.seatPlanRoomId,
+          seatNo: value.seatNo,
+          benchRow: value.benchRow,
+          benchColumn: value.benchColumn,
+          benchSlot: value.benchSlot,
+          benchPosition: value.benchPosition ?? null,
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(seatAssignments.id, value.assignmentId),
+            eq(seatAssignments.seatPlanId, id),
+          ),
+        );
+    return this.detail(user.schoolId, id);
+  }
+  async append(user: AuthUser, id: string) {
+    const p = await this.plan(user.schoolId, id);
+    if (p.status !== 'locked')
+      throw new BadRequestException('শুধু লক করা প্ল্যানে যোগ করা যাবে');
+    const links = await this.db
+      .select()
+      .from(seatPlanRooms)
+      .where(eq(seatPlanRooms.seatPlanId, id))
+      .orderBy(asc(seatPlanRooms.sortOrder));
+    const used = await this.db
+      .select({
+        roomId: seatAssignments.seatPlanRoomId,
+        seatNo: seatAssignments.seatNo,
+      })
+      .from(seatAssignments)
+      .where(eq(seatAssignments.seatPlanId, id));
+    const candidates = await this.db
+      .select({ studentId: seatPlanCandidates.studentId })
+      .from(seatPlanCandidates)
+      .leftJoin(
+        seatAssignments,
+        and(
+          eq(seatAssignments.studentId, seatPlanCandidates.studentId),
+          eq(seatAssignments.seatPlanId, id),
+        ),
+      )
+      .where(
+        and(
+          eq(seatPlanCandidates.seatPlanId, id),
+          eq(seatPlanCandidates.status, 'approved'),
+        ),
+      );
+    const seated = new Set(used.map((x) => `${x.roomId}|${x.seatNo}`));
+    const assignedStudents = new Set(
+      (
+        await this.db
+          .select({ studentId: seatAssignments.studentId })
+          .from(seatAssignments)
+          .where(eq(seatAssignments.seatPlanId, id))
+      ).map((x) => x.studentId),
+    );
+    const out = [];
+    let n = 0;
+    for (const link of links) {
+      const room = (
+        await this.db
+          .select()
+          .from(rooms)
+          .where(eq(rooms.id, link.roomId))
+          .limit(1)
+      )[0]!;
+      for (const pos of this.positions(
+        room,
+        p.perBench,
+        p.pattern as GenerateInput['pattern'],
+      )) {
+        const seatNo = ++n;
+        if (seated.has(`${link.id}|${seatNo}`)) continue;
+        const student = candidates.find(
+          (c) => !assignedStudents.has(c.studentId),
+        );
+        if (!student) break;
+        out.push({
+          seatPlanId: id,
+          seatPlanRoomId: link.id,
+          studentId: student.studentId,
+          seatNo,
+          ...pos,
+        });
+        assignedStudents.add(student.studentId);
+      }
+    }
+    if (out.length) await this.db.insert(seatAssignments).values(out);
+    return {
+      data: {
+        placed: out.length,
+        skipped: candidates.length - assignedStudents.size,
+      },
+    };
+  }
+  async changeStatus(
+    user: AuthUser,
+    id: string,
+    status: 'locked' | 'published',
+  ) {
+    const p = await this.plan(user.schoolId, id);
+    if (status === 'locked' && p.status !== 'draft')
+      throw new BadRequestException('শুধু খসড়া প্ল্যান লক করা যাবে');
+    if (status === 'published' && p.status !== 'locked')
+      throw new BadRequestException('আগে প্ল্যান লক করুন');
+    const assigned = await this.db
+      .select({ id: seatAssignments.id })
+      .from(seatAssignments)
+      .where(eq(seatAssignments.seatPlanId, id));
+    const approved = await this.db
+      .select({ id: seatPlanCandidates.id })
+      .from(seatPlanCandidates)
+      .where(
+        and(
+          eq(seatPlanCandidates.seatPlanId, id),
+          eq(seatPlanCandidates.status, 'approved'),
+        ),
+      );
+    if (assigned.length !== approved.length)
+      throw new BadRequestException(
+        'সব অনুমোদিত শিক্ষার্থীকে আসন না দিয়ে প্রকাশ করা যাবে না',
+      );
+    const [row] = await this.db
+      .update(seatPlans)
+      .set({ status, updatedAt: new Date() })
+      .where(eq(seatPlans.id, id))
+      .returning();
+    return { data: row };
+  }
+  async copy(user: AuthUser, id: string, targets: string[]) {
+    const p = await this.plan(user.schoolId, id);
+    const result = [];
+    for (const target of targets) {
+      const [es] = await this.db
+        .select({ examSubject: examSubjects, exam: exams, subject: subjects })
+        .from(examSubjects)
+        .innerJoin(exams, eq(exams.id, examSubjects.examId))
+        .innerJoin(subjects, eq(subjects.id, examSubjects.subjectId))
+        .where(
+          and(eq(examSubjects.id, target), eq(exams.schoolId, user.schoolId)),
+        )
+        .limit(1);
+      if (!es) continue;
+      const created = await this.create(user, {
+        sittingDate: p.sittingDate,
+        shift: p.shift,
+        title: `${es.exam.nameBn} — ${es.subject.nameBn}`,
+        examSubjectIds: [target],
+        selectedSectionIds: p.selectedSections as string[],
+        eligibilitySource: p.eligibilitySource as 'all' | 'failed',
+        sourceExamId: p.sourceExamId ?? undefined,
+        feeEventId: p.feeEventId ?? undefined,
+      });
+      result.push({
+        examSubjectId: target,
+        planId: created.data.id,
+        skipped: 0,
+      });
+    }
+    return { data: result };
+  }
+  async studentPlans(user: AuthUser) {
+    const own = await resolveOwnStudent(this.db, user);
+    if (!own) return { data: [] };
+    const rows = await this.db
+      .select({
+        plan: seatPlans,
+        assignment: seatAssignments,
+        candidate: seatPlanCandidates,
+        subjectNameBn: subjects.nameBn,
+        examNameBn: exams.nameBn,
+        roomName: rooms.nameBn,
+        building: rooms.building,
+        floor: rooms.floor,
+        layout: rooms.layout,
+      })
+      .from(seatAssignments)
+      .innerJoin(
+        seatPlans,
+        and(
+          eq(seatPlans.id, seatAssignments.seatPlanId),
+          eq(seatPlans.status, 'published'),
+        ),
+      )
+      .innerJoin(
+        seatPlanRooms,
+        eq(seatPlanRooms.id, seatAssignments.seatPlanRoomId),
+      )
+      .innerJoin(rooms, eq(rooms.id, seatPlanRooms.roomId))
+      .innerJoin(
+        seatPlanCandidates,
+        and(
+          eq(seatPlanCandidates.seatPlanId, seatPlans.id),
+          eq(seatPlanCandidates.studentId, own.student.id),
+        ),
+      )
+      .leftJoin(
+        examSubjects,
+        eq(examSubjects.id, seatPlanCandidates.examSubjectId),
+      )
+      .leftJoin(subjects, eq(subjects.id, examSubjects.subjectId))
+      .leftJoin(exams, eq(exams.id, examSubjects.examId))
+      .where(
+        and(
+          eq(seatAssignments.studentId, own.student.id),
+          eq(seatPlans.schoolId, own.schoolId),
+        ),
+      )
+      .orderBy(asc(seatPlans.sittingDate));
+    return {
+      data: rows.map((r) => ({
+        id: r.plan.id,
+        roll: own.student.roll,
+        subjectNameBn: r.subjectNameBn,
+        examNameBn: r.examNameBn ?? r.plan.title,
+        sittingDate: r.plan.sittingDate,
+        shift: r.plan.shift,
+        roomName: r.roomName,
+        building: r.building,
+        floor: r.floor,
+        seatNo: r.assignment.seatNo,
+        benchRow: r.assignment.benchRow,
+        benchColumn: r.assignment.benchColumn,
+        benchSlot: r.assignment.benchSlot,
+        benchPosition: r.assignment.benchPosition,
+        layout: r.layout,
+      })),
+    };
+  }
+  async sendSms(user: AuthUser, id: string) {
+    const p = await this.plan(user.schoolId, id);
+    if (p.status !== 'published')
+      throw new BadRequestException('শুধু প্রকাশিত প্ল্যানে SMS পাঠানো যাবে');
+    const rows = await this.assignmentRows(user.schoolId, id);
+    const subject = (
+      await this.db
+        .select({ name: subjects.nameBn, exam: exams.nameBn })
+        .from(seatPlanSubjects)
+        .innerJoin(
+          examSubjects,
+          eq(examSubjects.id, seatPlanSubjects.examSubjectId),
+        )
+        .innerJoin(subjects, eq(subjects.id, examSubjects.subjectId))
+        .innerJoin(exams, eq(exams.id, examSubjects.examId))
+        .where(eq(seatPlanSubjects.seatPlanId, id))
+        .limit(1)
+    )[0];
+    const recipients = rows
+      .map((r) => ({
+        recipient: {
+          name: r.name,
+          mobile: normalizeBdMobile(r.student.guardianMobile) ?? '',
+          studentId: r.assignment.studentId,
+        },
+        message: `${subject?.exam ?? 'পরীক্ষা'} — ${subject?.name ?? 'বিষয়'} (${p.sittingDate}): রুম ${r.roomName}, সিট ${r.assignment.seatNo}`,
+      }))
+      .filter((x) => x.recipient.mobile);
+    return this.sms.sendSeatPlan(user, recipients);
+  }
 }
-
